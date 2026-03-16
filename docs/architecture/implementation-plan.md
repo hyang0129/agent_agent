@@ -21,9 +21,17 @@ src/agent_agent/
         __init__.py
         agent.py           # PlanOutput, CodeOutput, TestOutput, ReviewOutput, AgentOutput
         context.py         # NodeContext, SharedContext, SharedContextView, IssueContext,
-                           # RepoMetadata, AncestorContext, DiscoveryRecord, all Discovery types
-        dag.py             # DAGRun, DAGNode, NodeResult, ExecutionMeta
-        budget.py          # BudgetEvent, BudgetEventType
+                           # RepoMetadata, AncestorContext, DiscoveryRecord, all Discovery types;
+                           # NodeContext fields: issue, repo_metadata (never capped [P5.3]),
+                           #   parent_outputs, ancestor_context, shared_context_view,
+                           #   context_bytes_used: int;
+                           # SharedContextView.usd_budget_used: float (not token_budget_used)
+        dag.py             # DAGRun, DAGNode, NodeResult, ExecutionMeta;
+                           # ExecutionMeta tracks input_tokens/output_tokens for observability;
+                           # token counts are NOT the budget unit — USD is
+        budget.py          # BudgetEvent, BudgetEventType;
+                           # BudgetEvent fields: dag_run_id, node_id, event_type,
+                           #   usd_before: float, usd_after: float, reason, timestamp
         escalation.py      # EscalationConfig, EscalationRecord
     state.py               # SQLite schema + async CRUD (aiosqlite); all 6 tables;
                            # dag_runs includes usd_used REAL DEFAULT 0.0 column;
@@ -37,8 +45,13 @@ tests/
     unit/
         __init__.py
         test_config.py     # env profile loading, setting overrides
-        test_models.py     # Pydantic validation, AgentOutput union, discovery field shapes
-        test_state.py      # CRUD round-trips against :memory: SQLite
+        test_models.py     # Pydantic validation, AgentOutput union, discovery field shapes;
+                           # NodeContext: repo_metadata field present and typed RepoMetadata;
+                           # SharedContextView: usd_budget_used is float, no token_budget_used;
+                           # BudgetEvent: usd_before/usd_after are float, no tokens fields
+        test_state.py      # CRUD round-trips against :memory: SQLite;
+                           # increment_usd_used: assert usd_used column increments correctly;
+                           # confirm usd_used starts at 0.0 on dag_run creation
         test_budget.py     # allocation, 5% USD threshold, event log (usd_before/usd_after)
 ```
 

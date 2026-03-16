@@ -65,7 +65,7 @@ class SharedContextView(BaseModel):
     """Read-only snapshot passed to each node at dispatch time.
 
     Evidence fields may be masked per P5.8 pruning rules.
-    Capped at 25% of the node's token budget [P5, P7].
+    Capped at 25% of the node's USD budget [P5, P7].
     """
     file_mappings: list[DiscoveryRecord] = []
     root_causes: list[DiscoveryRecord] = []
@@ -74,7 +74,7 @@ class SharedContextView(BaseModel):
     negative_findings: list[DiscoveryRecord] = []
     summary: str = ""
     active_plan: str = ""
-    token_budget_used: int = 0
+    usd_budget_used: float = 0.0
 
 
 # ---------------------------------------------------------------------------
@@ -100,9 +100,11 @@ class AncestorContext(BaseModel):
 
 
 class NodeContext(BaseModel):
-    issue: IssueContext
+    issue: IssueContext                     # always verbatim [P5.3]; never capped or pruned
+    repo_metadata: RepoMetadata             # always verbatim [P5.3]; never capped or pruned;
+                                            # populated unconditionally on every dispatch
     # All immediate DAG predecessors, keyed by node_id [P5.11]
     parent_outputs: dict[str, AgentOutput] = {}
     ancestor_context: AncestorContext = AncestorContext()
     shared_context_view: SharedContextView = SharedContextView()
-    context_budget_used: int = 0
+    context_bytes_used: int = 0             # byte sum of DiscoveryRecords in shared_context_view

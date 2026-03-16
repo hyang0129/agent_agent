@@ -23,6 +23,7 @@ from agent_agent.models.agent import (
     RootCause,
     SequentialEdge,
 )
+from agent_agent.models.budget import BudgetEvent, BudgetEventType
 from agent_agent.models.context import (
     IssueContext,
     NodeContext,
@@ -175,13 +176,72 @@ class TestNodeContext:
     def _issue(self) -> IssueContext:
         return IssueContext(url="https://github.com/x/y/issues/1", title="Fix bug", body="details")
 
+    def _repo_metadata(self) -> RepoMetadata:
+        return RepoMetadata(path="/tmp/repo", default_branch="main", claude_md="")
+
     def test_default_empty_context(self):
-        ctx = NodeContext(issue=self._issue())
+        ctx = NodeContext(issue=self._issue(), repo_metadata=self._repo_metadata())
         assert ctx.parent_outputs == {}
-        assert ctx.context_budget_used == 0
+        assert ctx.context_bytes_used == 0
+
+    def test_repo_metadata_required(self):
+        # repo_metadata is mandatory — no default [P5.3]
+        with pytest.raises(Exception):
+            NodeContext(issue=self._issue())  # type: ignore[call-arg]
+
+    def test_repo_metadata_is_repo_metadata_type(self):
+        ctx = NodeContext(issue=self._issue(), repo_metadata=self._repo_metadata())
+        assert isinstance(ctx.repo_metadata, RepoMetadata)
+        assert ctx.repo_metadata.path == "/tmp/repo"
+
+    def test_repo_metadata_claude_md_can_be_empty_stub(self):
+        # Phase 2 stub: claude_md is empty string until Phase 3 populates it
+        ctx = NodeContext(issue=self._issue(), repo_metadata=self._repo_metadata())
+        assert ctx.repo_metadata.claude_md == ""
 
     def test_parent_outputs_keyed_by_node_id(self):
         plan = PlanOutput(investigation_summary="plan")
-        ctx = NodeContext(issue=self._issue(), parent_outputs={"node-plan-1": plan})
+        ctx = NodeContext(
+            issue=self._issue(),
+            repo_metadata=self._repo_metadata(),
+            parent_outputs={"node-plan-1": plan},
+        )
         assert "node-plan-1" in ctx.parent_outputs
         assert isinstance(ctx.parent_outputs["node-plan-1"], PlanOutput)
+
+
+class TestSharedContextView:
+    def test_usd_budget_used_is_float(self):
+        view = SharedContextView(usd_budget_used=0.042)
+        assert isinstance(view.usd_budget_used, float)
+        assert view.usd_budget_used == pytest.approx(0.042)
+
+    def test_default_usd_budget_used_is_zero(self):
+        view = SharedContextView()
+        assert view.usd_budget_used == 0.0
+
+    def test_no_token_budget_used_field(self):
+        view = SharedContextView()
+        assert not hasattr(view, "token_budget_used")
+
+
+class TestBudgetEventModel:
+    def test_usd_fields_are_float(self):
+        from datetime import datetime, timezone
+        import uuid
+        event = BudgetEvent(
+            id=str(uuid.uuid4()),
+            dag_run_id="run-1",
+            node_id="node-1",
+            event_type=BudgetEventType.USAGE,
+            usd_before=1.0,
+            usd_after=1.05,
+            reason="recorded",
+            timestamp=datetime.now(timezone.utc),
+        )
+        assert isinstance(event.usd_before, float)
+        assert isinstance(event.usd_after, float)
+
+    def test_no_token_fields(self):
+        assert not hasattr(BudgetEvent.model_fields, "tokens_before")
+        assert not hasattr(BudgetEvent.model_fields, "tokens_after")

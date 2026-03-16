@@ -32,7 +32,8 @@ class Settings(BaseSettings):
     git_push_enabled: bool = False
     dry_run_github: bool = True
     max_budget_usd: float = 5.0
-    usd_per_byte: float = 0.0   # profiling placeholder; 0 disables USD-based context cap
+    usd_per_byte: float = 0.0       # profiling placeholder; 0 disables USD-based context cap
+    worktree_base_dir: str | None = None  # required at runtime; WorktreeManager raises if None
     port: int = 8100
     max_workers: int = 1
 

@@ -66,3 +66,15 @@ def test_default_port():
 def test_default_max_workers():
     s = Settings()
     assert s.max_workers == 1
+
+
+def test_worktree_base_dir_defaults_to_none():
+    # Not set by default — WorktreeManager raises if None at runtime
+    s = Settings()
+    assert s.worktree_base_dir is None
+
+
+def test_worktree_base_dir_override(monkeypatch: pytest.MonkeyPatch):
+    monkeypatch.setenv("AGENT_AGENT_WORKTREE_BASE_DIR", "/workspaces/.agent_agent_tests/worktrees")
+    s = Settings()
+    assert s.worktree_base_dir == "/workspaces/.agent_agent_tests/worktrees"
