@@ -32,6 +32,7 @@ agent_agent/
 │       ├── github/            # GitHub integration (issues, PRs, branches)
 │       │   └── client.py      # async httpx; DRY_RUN_GITHUB guard; branch protection check
 │       ├── cli.py             # typer CLI: run, status, bootstrap
+│       ├── orchestrator.py    # Orchestrator: run lifecycle (DAGRun → executor → result)
 │       └── server.py          # FastAPI app: GET /dags/{id}/status
 ├── tests/
 │   ├── unit/                  # Pure Python, no I/O; AGENT_AGENT_ENV=test

@@ -11,7 +11,7 @@ Every observable event belongs to one of three levels. Higher levels are more ex
 **Level 1 — Status (is it working?)**
 - DAG execution status: `pending` / `running` / `completed` / `failed`
 - Per-node status: `pending` / `running` / `completed` / `failed` / `skipped` / `frozen_at_budget` / `dead_letter`
-- Surfaced via the `/api/v1/dags/{dag_id}/status` endpoint and CLI display
+- Surfaced via the `/api/v1/dags/{dag_id}/status` endpoint and `agent-agent status` CLI command
 - Required for MVP
 
 **Level 2 — Metrics (how well is it working?)**
@@ -99,24 +99,9 @@ The endpoint reads from the SQLite state store; it does not require polling agen
 
 ---
 
-### 4. CLI Progress Display
+### 4. CLI Output
 
-**P6. For MVP, the CLI display is the primary human interface for run progress.** No web dashboard is required.
-
-The display is updated in-place (using `rich` or equivalent) as node status transitions arrive:
-
-```
-Issue #42: Add rate limiting
-━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━
-[✓] research_01      3.2s    5,414 tok
-[▸] implement_01     1.8s    2,100 tok  (streaming...)
-[ ] test_01
-[ ] review_01
-━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━
-Total: 7,514 / 50,000 tokens  ~$0.12
-```
-
-**P7. The CLI display reads from the same status endpoint as external callers.** It does not have special internal access to orchestrator state. This ensures the endpoint is always exercised during development.
+**P6. The CLI prints final run output on completion.** When `agent-agent run` completes, it prints the branch name and review summary to stdout. No live progress display is required — DAG depth is determined dynamically by recursive Plan composite output and cannot be predicted at run start, making a progress bar misleading. Users who want mid-run status use `agent-agent status` in a separate terminal or query the `/api/v1/dags/{id}/status` endpoint.
 
 ---
 
@@ -193,7 +178,7 @@ When extending beyond MVP, priority order is:
 | Structured JSON logs via `structlog` | Required | — |
 | `dag_run_id` + `node_id` on every record | Required | — |
 | `/dags/{id}/status` endpoint | Required | — |
-| CLI progress display | Required | — |
+| CLI prints branch name + summary on completion | Required | — |
 | Error correlation in failure events | Required | — |
 | OTel-compatible field names | Required | — |
 | SaaS observability platform | Prohibited | Optional |

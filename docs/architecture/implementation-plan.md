@@ -16,7 +16,12 @@ Establish the package skeleton, config system, all Pydantic models, state store,
 src/agent_agent/
     __init__.py
     config.py              # pydantic-settings; env profiles; all AGENT_AGENT_* settings;
-                           # includes MAX_BUDGET_USD (float), WORKTREE_BASE_DIR (str)
+                           # includes MAX_BUDGET_USD (float), WORKTREE_BASE_DIR (str),
+                           # PORT (int, default 8100 — FastAPI server bind port),
+                           # GIT_PUSH_ENABLED (bool, default False — True only in test/prod
+                           #   envs where a real remote exists; guards all push operations),
+                           # DRY_RUN_GITHUB (bool, default True — must be explicitly set False
+                           #   to allow any GitHub write; guards all client write methods)
     models/
         __init__.py
         agent.py           # PlanOutput, CodeOutput, TestOutput, ReviewOutput, AgentOutput
@@ -197,32 +202,96 @@ tests/
 
 ## Phase 3 — CLI + Server + GitHub Client
 
-The user-facing surface. `agent-agent run` starts the in-process FastAPI server, validates the target repo, creates a DAG run record, and hands off to the executor (which still uses stub agents). `agent-agent status` polls the status endpoint.
+The user-facing surface. The CLI handles argument parsing, validation, and error reporting. The `Orchestrator` owns the full run lifecycle: DAGRun creation, event emission, in-process FastAPI server, and executor handoff (which still uses stub agents). This split keeps the run logic reusable by tests and future callers without going through the CLI. `agent-agent status` reads DAG status directly from SQLite — the server only lives inside `run`, so status must never depend on an active HTTP endpoint.
 
 **Deliverables**
 
 ```
 src/agent_agent/
-    cli.py                 # typer CLI: `run`, `status`, `bootstrap` (stub: non-zero exit)
-                           # run: port conflict → exit with clear error; self-repo rejection;
-                           # CLAUDE.md + policy presence validation
-    server.py              # FastAPI app: GET /dags/{id}/status (L1 status from SQLite)
-                           # bound in-process by `run`; lifetime = run duration
+    cli.py                 # typer CLI: `run`, `status`, `bootstrap`
+                           # bootstrap stub: typer.Exit(code=2) + printed message
+                           #   "bootstrap is not yet implemented. Run `agent-agent --help` for available commands."
+                           # run --issue <url> --repo <path>:
+                           #   port conflict → exit with clear error;
+                           #   self-repo rejection (--repo resolves to agent_agent's own tree);
+                           #   CLAUDE.md presence validation: reads CLAUDE.md from local --repo
+                           #     path via filesystem (not GitHub client);
+                           #   policy presence validation:
+                           #     target repo must contain docs/policies/POLICY_INDEX.md —
+                           #     existence check only (do not parse or verify referenced files);
+                           #     missing → exit with clear error instructing the user to create
+                           #     the required files manually and pointing to documentation for
+                           #     the expected layout (MUST NOT suggest running `agent-agent bootstrap`
+                           #     — that command is a non-functional stub; see mvp-architecture.md §2);
+                           #   after validation: constructs Orchestrator with validated config,
+                           #     repo path, CLAUDE.md content, and issue URL; calls
+                           #     orchestrator.run() which returns (branch_name, summary);
+                           #   prints branch_name + summary to stdout
+                           # status [run-id]: reads DAG record directly from SQLite; no HTTP call
+    orchestrator.py        # Orchestrator: owns the full run lifecycle after CLI validation;
+                           #   __init__(config, repo_path, claude_md_content, issue_url, state_store);
+                           #   async run() → (branch_name: str, summary: str):
+                           #     1. stores claude_md in SharedContext.repo_metadata.claude_md
+                           #     2. creates DAGRun record in state store
+                           #     3. emit_event(EventType.DAG_STARTED, dag_run_id, node_id=None)
+                           #        — node_id=None per P11: "records that predate a node assignment
+                           #        use node_id: null"
+                           #     4. binds in-process FastAPI server on settings.PORT (default 8100)
+                           #     5. hands off to executor (stub agents in Phase 3)
+                           #     6. returns (CodeOutput.branch_name, ReviewOutput.summary)
+                           #   Reusable by any caller (CLI, tests, future API); not CLI-specific
+    server.py              # FastAPI app: GET /dags/{id}/status
+                           # L1 status only (DAG + per-node execution state from SQLite);
+                           # L2 metrics (tokens, cost, retries, budget) are available via
+                           #   structured logs only — not exposed on this endpoint for MVP;
+                           # bound in-process by Orchestrator; lifetime = run duration
     github/
         __init__.py
-        client.py          # async httpx: issue read (GET), DRY_RUN_GITHUB guard on writes
-                           # branch protection check (main/master/production blocklist)
+        client.py          # async httpx: issue read (GET), AGENT_AGENT_DRY_RUN_GITHUB guard on writes
+                           # branch protection check stub (main/master/production blocklist):
+                           #   raises NotImplementedError — no write operations in Phase 3,
+                           #   so the check cannot be meaningfully exercised until Phase 4
 tests/
     unit/
-        test_cli.py        # self-repo rejection, missing CLAUDE.md error, bootstrap stub exit
-        test_server.py     # status endpoint response shape against :memory: state
+        test_cli.py        # All CLI unit tests mock the GitHub client (no GITHUB_TOKEN needed).
+                           # self-repo rejection; missing CLAUDE.md error;
+                           # bootstrap stub exit (code=2 + message — exit code 2 is the
+                           #   canonical value; see also mvp-architecture.md §2);
+                           # missing docs/policies/POLICY_INDEX.md → exit with clear error
+                           #   (assert message does NOT mention "bootstrap" or
+                           #   "agent-agent bootstrap" — §2 prohibition);
+                           # port conflict → exit with clear error
+        test_orchestrator.py # Orchestrator unit tests (mock GitHub client, :memory: SQLite).
+                           # DAGRun record created in SQLite BEFORE emit_event(DAG_STARTED)
+                           #   fires — assert record exists, then assert structlog captured
+                           #   event with matching dag_run_id (ordering matters per P11);
+                           # orchestrator.run() returns (branch_name, summary) from stub
+                           #   agent outputs — Phase 3 validates stub values appear correctly
+        test_server.py     # status endpoint against :memory: state:
+                           #   valid dag_run_id → response includes DAG status + per-node
+                           #     status list (P11 L1 = "DAG and per-node execution state");
+                           #   unknown dag_run_id → 404;
+                           #   response shape matches L1 contract (no L2 metrics fields)
     component/
-        test_github.py     # issue fetch with pytest-httpx mock; DRY_RUN guard
+        test_github.py     # Requires GITHUB_TOKEN; marked @pytest.mark.github.
+                           # Uses github_test_repo fixture (tests/fixtures/conftest.py):
+                           #   fixture creates a real GitHub repo + issue via GitHub API;
+                           #   yields (repo_full_name, issue_number);
+                           #   teardown deletes the repo via API after the test session.
+                           # NOTE: github_test_repo is session-scoped and separate from the
+                           #   target_repo / repo_with_remote fixtures (which are local-only
+                           #   and do not require GITHUB_TOKEN).
+                           # issue fetch: assert IssueContext fields populated from real response;
+                           # AGENT_AGENT_DRY_RUN_GITHUB guard: assert write methods raise
+                           #   when DRY_RUN_GITHUB=True (tested via the branch-create stub
+                           #   path added to client.py for this purpose)
 ```
 
-**Dependencies to add:** `typer`, `fastapi`, `uvicorn`, `httpx`, `pytest-httpx`
+**Dependencies to add:** `typer`, `fastapi`, `uvicorn`, `httpx`
 
-**Gate:** `agent-agent run --issue <url> --repo <path>` runs end-to-end (with stub agents) and prints a branch name + summary. `agent-agent status` returns L1 status. All tests pass.
+**Test requirements:** `GITHUB_TOKEN` env var must be set for component tests that use `github_test_repo`. The fixture is defined in `tests/fixtures/conftest.py` and is session-scoped — one repo is created per test session and deleted in the finalizer. Requires a GitHub account with permission to create/delete repos. All tests using this fixture must be marked `@pytest.mark.github` so they can be skipped in environments without credentials (`pytest -m "not github"`).
+
+**Gate:** `agent-agent run --issue <url> --repo <path>` runs end-to-end (with stub agents) and prints a stub branch name + stub summary to stdout — values are hardcoded fakes from the Phase 2 stub agents; the gate validates that the Orchestrator propagates them correctly, not that they are meaningful. `agent-agent status` returns L1 status (DAG + per-node state). All unit tests pass (no `GITHUB_TOKEN` required). Component tests pass when `GITHUB_TOKEN` is set (`pytest -m github`).
 
 ---
 
@@ -281,6 +350,9 @@ tests/component/
     test_plan_composite.py    # produces PlanOutput with valid ChildDAGSpec
     test_coding_composite.py  # full Programmer→Test→Debug cycle; push verified on bare remote
     test_review_composite.py  # reads pushed branch; produces ReviewOutput
+    test_github.py            # branch protection check (main/master/production blocklist):
+                              #   assert check raises on protected branch names before any write;
+                              #   assert check passes on feature branch names
 ```
 
 **Gate:** Component tests pass at `MAX_WORKERS=1` against the fixture repo. Each composite produces a valid, Pydantic-validated output. The coding composite's pushed branch is visible on the bare remote before the review composite starts.

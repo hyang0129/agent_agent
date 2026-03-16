@@ -53,13 +53,13 @@ User
 
 ### 1. CLI Layer
 
-The user-facing surface. On `run`, the CLI starts an in-process FastAPI server bound to a config-driven port (`AGENT_AGENT_PORT`, default `8100`) and hands control to the orchestrator. The server remains alive for the duration of the run. `agent-agent status` connects to this port to poll L1 status — it does not read SQLite directly. Users interact with the CLI, not the HTTP layer directly.
+The user-facing surface. On `run`, the CLI starts an in-process FastAPI server bound to a config-driven port (`AGENT_AGENT_PORT`, default `8100`) and hands control to the orchestrator. The server remains alive for the duration of the run and exposes `GET /dags/{id}/status` for programmatic consumers (external tools, future UIs). `agent-agent status` reads DAG state directly from SQLite — it never depends on the server being alive. This ensures `status` works for completed runs, crashed runs, and paused runs awaiting human input (P06 escalation, P09 budget pause). Users interact with the CLI, not the HTTP layer directly.
 
 | Command | Action |
 |---------|--------|
 | `agent-agent bootstrap` | Not yet implemented — prints a stub message and exits |
 | `agent-agent run --issue <url>` | Start a DAG run for a GitHub issue; binds server on `AGENT_AGENT_PORT` |
-| `agent-agent status [run-id]` | Poll `GET /dags/{id}/status` on the running server; fails with a clear error if the server is not reachable |
+| `agent-agent status [run-id]` | Read DAG state directly from SQLite; works regardless of whether a `run` is active |
 
 On `run`, the CLI:
 1. Loads config (`AGENT_AGENT_ENV` → `.env.{env}` + `.env.local` + env vars)
@@ -424,8 +424,8 @@ All events flow through a single `emit_event(...)` call. Every log record is JSO
 
 MVP: local structured log files only. No SaaS observability platform.
 
-API endpoint: `GET /dags/{id}/status` (L1 real-time status). The server is bound by `agent-agent run` on `AGENT_AGENT_PORT` (default `8100`) and is alive for the duration of the run. `agent-agent status` connects to this port; it does not read SQLite directly.
-CLI: progress display polling the L1 status endpoint.
+API endpoint: `GET /dags/{id}/status` (L1 real-time status). The server is bound by `agent-agent run` on `AGENT_AGENT_PORT` (default `8100`) and is alive for the duration of the run. The endpoint serves programmatic consumers (external tools, future UIs) — `agent-agent status` reads SQLite directly so it works regardless of server state.
+CLI: `agent-agent status` queries SQLite directly; no dependency on a running server.
 
 ---
 
