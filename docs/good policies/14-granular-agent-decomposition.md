@@ -25,14 +25,9 @@ The most critical decomposition is between agents that **produce changes** (writ
 
 An agent that can both write arbitrary files and run `git push` has an unacceptably large blast radius. A hallucination in a coding step can be immediately and irreversibly published. Separating these concerns introduces a mandatory validation boundary.
 
-### 3. The code/commit split replaces the monolithic implement agent
+### 3. The coding composite node receives its own working tree
 
-| Agent | Responsibility | Can do | Cannot do |
-|-------|---------------|--------|-----------|
-| **Code** | Produce file changes | Read files, write files, run `python`/`pytest` for validation | Any git operation, branch creation, push, PR creation |
-| **Commit** | Persist file changes to git | Read files (to verify diff), `git add`, `git commit`, `git push` on assigned branch only | Write/modify files, run arbitrary commands, create PRs |
-
-The code agent outputs a set of file changes. The commit agent receives those changes, validates them, and persists them. If validation fails, the commit agent rejects the changes and the orchestrator can retry the code agent without any git state to clean up.
+The orchestrator creates a temporary git worktree for each coding composite node. The coding agents operate exclusively within this isolated worktree, so their file mutations never touch the primary checkout or interfere with other concurrent coding nodes. When the node completes, the orchestrator merges or discards the worktree as appropriate.
 
 ### 4. New agent type decomposition checklist
 
@@ -62,7 +57,7 @@ Every tool call, regardless of whether it is allowed, MUST be logged with: agent
 
 This policy is the enforcement mechanism for the Maximum Agent Separation design principle stated in CLAUDE.md. It operationalizes the principle into concrete rules: what to split, how to split it, and how to enforce the split at runtime.
 
-The code/commit separation is the highest-value decomposition because it places a validation boundary between the most dangerous pair of capabilities in the system (file mutation + git persistence). Every other decomposition follows the same logic at lower stakes.
+Giving each coding composite node its own worktree is the highest-value isolation mechanism because it guarantees file mutations are contained — a misbehaving coding agent cannot corrupt the primary checkout or collide with other concurrent nodes.
 
 The decomposition checklist (Rule 4) ensures this policy scales to future agent types without requiring per-type policy amendments. Any new agent type that passes all four checks is safe by construction; any that fails a check must be decomposed before implementation.
 

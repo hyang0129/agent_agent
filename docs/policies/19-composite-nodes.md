@@ -11,7 +11,7 @@ The current architecture has two structural problems:
 This policy introduces two **composite nodes** that encapsulate agent execution within single outer DAG nodes:
 
 - The **Planning Node** is implemented in the MVP as a single agent that performs research, planning, and orchestration in one tool-use loop. The target architecture decomposes this into an internal acyclic subgraph (Research → Plan → Orchestrate), but this decomposition is deferred — a single agent with the right tools and a clear prompt can perform all three activities coherently in one pass, and the SOTA evidence supports this approach.
-- The **Coding Node** runs an internal budget-gated cyclic subgraph (Programmer ↔ Test Designer ↔ Test Executor ↔ Debugger ↔ Commit).
+- The **Coding Node** runs an internal budget-gated cyclic subgraph (Programmer ↔ Test Designer ↔ Test Executor ↔ Debugger).
 
 The outer DAG becomes a clean two-node-plus-review structure at each nesting level. Both nodes are opaque to the outer DAG — it sees only typed inputs and outputs.
 
@@ -51,23 +51,15 @@ Leading multi-agent systems consistently treat the research-plan-decide pipeline
 
 **Anthropic's guidance** (December 2024, updated 2025) recommends that orchestration logic — deciding what to do, how to decompose, when to stop — should live in deterministic code paths ("workflows") rather than in autonomous agent loops. The Planning Node follows this: its internal structure (Research → Plan → Orchestrate) is a fixed pipeline, not a dynamic agent conversation.
 
-### Budget-Gating vs. Iteration Caps
+### Cycle Limits and Diminishing Returns
 
-**Agent Contracts** (2026) formalizes resource contracts with conservation laws for autonomous AI systems. A composite agent receives a budget allocation from its parent; its internal execution can use any strategy (including cycles) as long as it respects the budget boundary. The BALANCED mode (medium effort, 90s timeout) achieves 86% success vs. 70% for URGENT mode, investing 75% more tokens for a 16-percentage-point improvement. The key insight: the relationship between resource investment and success is non-linear and problem-dependent. Fixed iteration caps cannot capture this.
+**Reflexion** (Shinn et al., NeurIPS 2023) showed that the number of productive iterations varies by problem difficulty. Easy problems are solved in 1-2 iterations; hard problems benefit from 3-5. However, returns diminish steeply — the majority of recoverable failures are caught by attempt 2-3. Beyond that, the failure is typically structural (wrong approach) rather than incidental (wrong implementation), and more cycles of the same approach rarely help.
 
-**Reflexion** (Shinn et al., NeurIPS 2023) showed that the number of productive retry iterations varies by problem difficulty. Easy problems are solved in 1-2 iterations; hard problems benefit from 4-5. Budget-gating naturally adapts: easy problems exit early and return unspent budget; hard problems consume more but keep going as long as the allocation permits.
+**Self-Debugging** (Chen et al., ICLR 2024) confirmed this pattern: LLMs given execution feedback improve significantly on the first retry, modestly on the second, and negligibly thereafter. The implication for the Coding Node: 3 cycles captures nearly all recoverable failures. If the code still doesn't pass, the right response is to replan (change approach), not to keep debugging (same approach, more attempts).
 
-**Huang et al. (ICLR 2024)** established that intrinsic self-correction (without external signal) degrades performance. The Coding Node's cycle is productive because each iteration incorporates external feedback (test results). Budget-gating pairs well with this: each cycle iteration is useful work, not blind repetition.
+**Huang et al. (ICLR 2024)** established that intrinsic self-correction (without external signal) degrades performance. The Coding Node's cycle is productive because each iteration incorporates external feedback (test results). But even with external feedback, the information gain per cycle decreases — cycle 3's Debugger diagnosis is unlikely to reveal something fundamentally new that cycles 1-2 missed.
 
-### Work Preservation in Iterative Systems
-
-**Temporal** preserves workflow state through event sourcing — every activity completion is an immutable event. On crash recovery, the workflow replays from the event log.
-
-**Flyte** caches task outputs by version. If a cached output exists for a given task version and input hash, the task is skipped on re-execution.
-
-**Git** is a work-preservation system. Commits are immutable snapshots. Committing intermediate work to a branch creates a checkpoint that can be restored without re-executing the work that produced it.
-
-For the Coding Node, work preservation means: after the Programmer produces a promising (but not yet passing) set of changes, the Commit agent snapshots that state. If the node is later interrupted, the next attempt can start from the snapshot rather than from scratch. This is future functionality — see Policy Section 9.
+**Agent Contracts** (2026) formalizes resource contracts with conservation laws for autonomous AI systems. Budget enforcement remains important as a secondary bound — a cycle with expensive sub-agent invocations (large codebases, many test files) can exhaust resources even within 3 cycles. The dual bound (cycle cap + budget) ensures both the iteration count and the cost are controlled.
 
 ---
 
@@ -142,39 +134,41 @@ Signals that would trigger decomposition:
 - Post-hoc analysis shows the agent producing low-quality plans because it rushes research to save iterations for planning.
 - The system scales to more complex issues where research scope exceeds what a single agent pass can cover.
 
-### 3. The Coding Node runs an internal budget-gated cyclic subgraph of five agents.
+### 3. The Coding Node runs an internal cyclic graph of four agents in a fixed order.
+
+The cycle always executes in the same sequence: **Programmer → Test Designer → Test Executor → Debugger → (repeat)**. There is no conditional branching or skipping — every cycle runs all four agents in order. This deterministic ordering makes the cycle predictable, debuggable, and easy to reason about.
 
 ```
 ┌──────────────────────────────────────────────────────────────────┐
 │                     Composite Coding Node                        │
+│                        (max_cycles: 3)                           │
 │                                                                  │
+│   Cycle 1, 2, ... N:                                             │
 │   ┌────────────┐    ┌───────────────┐    ┌───────────────┐       │
 │   │ Programmer │───→│ Test Designer │───→│ Test Executor │       │
 │   └────────────┘    └───────────────┘    └───────────────┘       │
 │         ↑                                       │                │
 │         │           ┌──────────┐                │                │
-│         │       ┌───│ Debugger │←───────────────┘ (on failure)   │
-│         │       │   └──────────┘                                 │
-│         │       │                                │                │
-│         │       │   ┌────────┐                   │                │
-│         │       └──→│ Commit │                   ↓                │
-│         │           └────────┘              (on success) → EXIT   │
-│         │               │                                        │
-│         └───────────────┘                                        │
+│         └───────────│ Debugger │←───────────────┘                │
+│                     └──────────┘                                 │
+│                                                                  │
+│   Exit conditions:                                               │
+│   • Tests pass after Test Executor  → EXIT (success)             │
+│   • Cycle count reaches max_cycles  → EXIT (failure + context)   │
+│   • Budget exhausted mid-cycle      → EXIT (failure + context)   │
 │                                                                  │
 └──────────────────────────────────────────────────────────────────┘
 ```
 
 The cycle flow:
 
-1. **Programmer** receives the subtask (from the Planning Node's output) and produces file changes.
+1. **Programmer** receives the subtask (from the Planning Node's output) and produces file changes. On cycles > 1, also receives the Debugger's diagnosis from the previous cycle.
 2. **Test Designer** examines the changes and writes or identifies test cases that validate the acceptance criteria. This includes edge cases and regression tests, not just happy-path assertions.
 3. **Test Executor** runs the test suite and reports pass/fail with full output.
 4. **On success:** the node exits with a successful result.
 5. **On failure:** the **Debugger** receives the failing test output, the Programmer's changes, and the Test Designer's test cases. It diagnoses the root cause and produces a structured diagnosis (what failed, why, what should change).
-6. **Commit** (future functionality) snapshots the current working state for preservation.
-7. **Programmer** receives the Debugger's diagnosis and iterates on the changes.
-8. The cycle repeats from step 2.
+6. If the cycle count has reached `max_cycles`, the node exits with a failure result containing the full cycle history (each cycle's changes, test results, and diagnosis). This context feeds back to the Planning Node at the next nesting level, which can replan with a different approach.
+7. Otherwise, the cycle repeats from step 1 with the Debugger's diagnosis as additional context.
 
 #### Sub-agent permissions within the Coding Node
 
@@ -184,18 +178,26 @@ The cycle flow:
 | **Test Designer** | Design test cases that validate the acceptance criteria against the Programmer's changes | Read files, read the Programmer's output, write test files | Modify source files, run tests, touch git |
 | **Test Executor** | Execute the test suite and report structured results | Read files, run pytest and other test commands | Write any files, touch git |
 | **Debugger** | Diagnose test failures and produce actionable fix instructions | Read files, read test output, read the Programmer's changes | Write files, run tests, touch git |
-| **Commit** | Snapshot working state to a branch for preservation | Read files (to verify state), git add, git commit on the node's working branch | Write/modify source files, run tests, push, create PRs |
 
-The principle of least privilege (Policy 14) applies within both composite nodes. No sub-agent has both mutation and persistence capabilities.
+The principle of least privilege (Policy 14) applies within the Coding Node. No sub-agent has capabilities beyond its single responsibility. No sub-agent can touch git — persistence is handled by the outer DAG after the Coding Node exits successfully.
 
-### 4. The Coding Node's cycle is bounded by budget, not by iteration count.
+### 4. The Coding Node is bounded by both a cycle cap and a budget.
 
-The Coding Node receives a token budget allocation from the outer DAG's budget allocation strategy (Policy 09). The inner cycle runs until:
+The Coding Node has two termination bounds:
 
-- **Success:** All tests pass. The node exits with a successful result and returns unspent budget to the reserve pool.
-- **Budget exhaustion:** The node's allocation is consumed. The node exits with a failure result containing: the last Programmer output, the last test results, and how many cycles completed. The outer DAG applies its standard failure handling (escalation per Policy 08, or retry of the entire Coding Node per Policy 07).
+- **Cycle cap (`max_cycles`, default: 3).** The maximum number of full Programmer → Test Designer → Test Executor → Debugger cycles before the node exits with failure. This is a hard limit — the node does not continue past it regardless of remaining budget.
+- **Budget.** The node receives a token budget allocation from the outer DAG (Policy 09). If the budget is exhausted mid-cycle, the node exits with failure.
 
-There is no fixed iteration cap on the inner cycle. A simple fix may pass on the first cycle. A hard bug may require five cycles. The budget gate naturally adapts to problem difficulty.
+The cycle cap is the primary bound. Its purpose is to **fail fast and return control to the Planning Node** rather than burning budget on an approach that isn't working. If the Programmer can't produce passing code in 3 cycles, the problem is likely with the approach (bad decomposition, missing context, wrong files targeted), not with the execution. The Planning Node is better positioned to replan than the Debugger is to keep patching.
+
+Three cycles is the default because:
+- **Cycle 1** is the initial attempt. Most well-scoped subtasks succeed here.
+- **Cycle 2** catches straightforward mistakes where the Debugger's diagnosis is sufficient to fix the issue.
+- **Cycle 3** is the last chance — if the first two diagnoses didn't lead to a fix, a third cycle rarely succeeds for the same reason (the Reflexion and Self-Debugging research shows diminishing returns after 2-3 attempts with external feedback).
+
+The Planner MAY override `max_cycles` per Coding Node when constructing the DAG. A subtask the Planner identifies as exploratory or high-risk may receive `max_cycles: 1` (fail fast). A subtask with a well-understood fix pattern may receive `max_cycles: 5`. Overrides are recorded in the DAG definition.
+
+On failure (cycle cap or budget exhaustion), the node's output includes the **full cycle history**: each cycle's Programmer changes, test results, and Debugger diagnosis. This context feeds into the next Planning Node, which can analyze what went wrong and replan — change the approach, split the subtask further, or provide more specific instructions.
 
 ### 5. The Planning Node is bounded by budget and iteration cap.
 
@@ -227,11 +229,10 @@ While the Coding Node's cycle count is budget-gated, each individual agent invoc
 | Test Designer | 20 | Reads changes, identifies test targets, writes test cases |
 | Test Executor | 15 | Runs tests, reads output |
 | Debugger | 20 | Reads failing output, analyzes root cause, writes diagnosis |
-| Commit | 5 | Mechanical: stage, commit |
 
 If an agent hits its iteration cap:
 - **Planning Node:** the node fails and the outer DAG applies retry policy.
-- **Coding Node:** the cycle marks the current cycle as failed and routes to the Debugger (if the failure is in Programmer, Test Designer, or Test Executor) or exits with failure (if Commit fails).
+- **Coding Node:** the cycle marks the current cycle as failed and routes to the Debugger (if the failure is in Programmer, Test Designer, or Test Executor).
 
 ### 7. MVP: Review is a simple (non-composite) node. Future: composite with Policy Review Agent.
 
@@ -245,29 +246,17 @@ In a future iteration, Review becomes a composite node with at least two paralle
 |--------|---------------|-----|--------|
 | **Review** | Evaluate code quality, correctness, and adherence to standards | Read files, read diffs, read git history, comment on PRs | Write files, touch git, run tests, merge PRs |
 
-### 8. MVP: no work preservation within the Coding Node. Restart from inputs on failure.
+### 8. No work preservation within the Coding Node. Restart from inputs on failure.
 
-For the MVP implementation, the Commit sub-agent is defined in the architecture but **not invoked during the cycle**. If the Coding Node fails (budget exhaustion), the entire node is retried from its original inputs — the subtask description, research output, and file context. No intermediate state from the failed cycle is preserved.
+The Coding Node does not persist intermediate state during its cycle. If the node fails (budget exhaustion), the entire node is retried from its original inputs — the subtask description, research output, and file context. No intermediate state from the failed cycle is preserved.
 
 This means:
 
 - **On budget exhaustion:** the inner cycle's partial work (Programmer's changes, test results, Debugger's diagnoses) is discarded. The outer DAG may retry the Coding Node with a fresh budget allocation (per Policy 07), starting the cycle from scratch.
 - **On crash recovery:** the Coding Node is re-invoked from its persisted inputs. There is no checkpoint within the cycle to resume from.
-- **Cost implication:** a Coding Node that fails after 4 productive cycles and then succeeds on retry will re-do all the work. This is acceptable for the MVP because it is simple, correct, and avoids the complexity of managing intermediate git state within the cycle.
+- **Cost implication:** a Coding Node that fails after 4 productive cycles and then succeeds on retry will re-do all the work. This is acceptable because it is simple, correct, and avoids the complexity of managing intermediate git state within the cycle.
 
-The Commit sub-agent's architecture slot exists so that work preservation can be added without structural changes (see Section 9).
-
-### 9. Future: the Commit sub-agent enables incremental work preservation.
-
-In a future iteration, the Commit sub-agent activates within the cycle. After each cycle where the Debugger identifies that the Programmer has made forward progress (tests moved from failing to partially passing, or new tests pass that previously didn't), the Commit agent snapshots the working state to the node's working branch.
-
-This enables:
-
-- **Budget exhaustion recovery:** instead of restarting from scratch, the retry loads the last committed snapshot and resumes from there.
-- **Crash recovery:** the orchestrator detects the Coding Node's working branch, loads the last commit, and resumes the cycle from the Debugger step.
-- **Cost savings:** work from productive early cycles is preserved. Only the failing tail-end of the cycle is re-executed.
-
-The criteria for "forward progress" (which triggers a Commit snapshot) is a design decision deferred to the implementation of this feature.
+Git persistence (branch creation, commits, push) is handled by the outer DAG after the Coding Node exits successfully, not by any agent inside the Coding Node.
 
 ---
 
@@ -279,7 +268,7 @@ The outer DAG remains strictly acyclic at every nesting level (P3 satisfied). Bo
 The standard spine (`research → plan → orchestrate` from P2) is absorbed into the Planning Node as a single agent's workflow. The spine's concerns still exist but are handled within one tool-use loop, not as three separate outer DAG nodes. The nesting model (P1) is unchanged — the Planning Node spawns child DAGs exactly as before.
 
 ### Policy 03 (Agent Type Taxonomy)
-The five-type outer taxonomy (Research, Code, Test, Commit, Review) becomes three node types (Planning Node, Coding Node, Review). The MVP has 7 distinct agent roles: 1 Planner agent + 5 Coding Node sub-agents + 1 Review agent. The outer DAG's coordination surface shrinks from five node types to three.
+The five-type outer taxonomy (Research, Code, Test, Commit, Review) becomes three node types (Planning Node, Coding Node, Review). The MVP has 6 distinct agent roles: 1 Planner agent + 4 Coding Node sub-agents + 1 Review agent. The outer DAG's coordination surface shrinks from five node types to three.
 
 ### Policy 04 (Agent-to-Node Mapping)
 The 1:1 rule (one node = one agent invocation) holds for the Planning Node (one agent) and Review (one agent). The Coding Node is the sole exception: a composite node that internally runs multiple agent invocations in a cycle. The 1:1 rule still applies within the Coding Node — each sub-agent invocation maps to one step in the internal cycle.
@@ -287,7 +276,7 @@ The 1:1 rule (one node = one agent invocation) holds for the Planning Node (one 
 ### Policy 07 (Retry Policy)
 Retry semantics split into two levels:
 - **Within the Coding Node:** the Programmer-Debugger cycle is the primary execution model, not a retry mechanism. It runs until success or budget exhaustion.
-- **At the outer DAG level:** if a composite node fails entirely (budget exhaustion, unrecoverable error), the outer DAG may retry the whole node per Policy 07. MVP: restart from inputs. Future: restart from last checkpoint.
+- **At the outer DAG level:** if a composite node fails entirely (budget exhaustion, unrecoverable error), the outer DAG may retry the whole node per Policy 07, restarting from inputs.
 
 The Planning Node is a single agent invocation, so its retry semantics are straightforward — the outer DAG retries the entire node on failure.
 
@@ -295,7 +284,7 @@ The Planning Node is a single agent invocation, so its retry semantics are strai
 Three nodes replace five individual allocations. The Planning Node (weight 1.5) absorbs Research (1.0) and Planner (0.5). The Coding Node (weight 3.0) absorbs Implement (2.5) and Test (0.7). Review (weight 1.2) is unchanged. Internal budget distribution within the Coding Node is managed by the node's own executor, not by the outer DAG's allocator.
 
 ### Policy 14 (Granular Agent Decomposition)
-The mutation/persistence separation principle is preserved within the Coding Node. The Programmer writes files but cannot touch git. The Commit agent touches git but cannot modify source files. The Planning Node's single Planner agent is read-only (no file writes, no git operations), so mutation/persistence separation is not applicable. The decomposition checklist (Section 4) still applies to each agent definition.
+No agent inside the Coding Node can touch git — persistence is handled by the outer DAG after the node exits. The Programmer writes files but cannot commit. The Planning Node's single Planner agent is read-only (no file writes, no git operations). The decomposition checklist (Section 4) still applies to each agent definition.
 
 ---
 
@@ -323,20 +312,25 @@ If the Plan is bad, the system discovers this after the Coding Node and Review e
 
 Policy 01 requires acyclicity at every nesting level. The previous workaround — modeling `CODE -> TEST -> CODE` as a "cycle with max iterations at DAG level" — is a contradiction that the architecture cannot cleanly express. The composite node resolves this by placing the cycle inside a node boundary. The outer DAG is genuinely acyclic. The inner cycle is genuinely cyclic. Each structure plays to its strengths: the DAG provides deterministic scheduling, cost attribution, and failure isolation; the cycle provides iterative refinement that adapts to problem difficulty.
 
-### Why five sub-agents in the Coding Node
+### Why four sub-agents in the Coding Node
 
 The separation follows from both empirical evidence and the principle of least privilege:
 
 - **Programmer vs. Test Designer** (from AgentCoder): Writing code and designing tests are different cognitive tasks. A combined agent mode-switches between "produce a solution" and "find ways to break it" — adversarial reasoning that LLMs perform better when isolated.
 - **Test Designer vs. Test Executor** (from AgentCoder): Designing tests requires reasoning about edge cases and failure modes. Executing tests requires running commands and parsing output. The designer should not be influenced by execution mechanics; the executor should not be designing tests.
 - **Debugger as a separate role** (from MapCoder): Diagnosing a failure is different from fixing it. The Debugger analyzes test output and produces a structured diagnosis; the Programmer acts on it. This separation contributed to MapCoder's 93.9% on HumanEval.
-- **Commit as a separate role** (from Policy 14): The mutation/persistence separation. Even inside the cycle, the agent that modifies source files must not be the agent that persists state to git.
 
-### Why budget-gating instead of iteration caps for the Coding Node
+No sub-agent inside the Coding Node can touch git. Persistence (branch creation, commits, push) is an outer DAG concern that occurs after the Coding Node exits successfully. This keeps the cycle focused purely on producing correct code.
 
-Iteration caps are a proxy for the real constraint (cost). A cap of 3 iterations is either too many for a simple fix or too few for a hard bug. Budget-gating aligns the termination condition with the actual resource being consumed. The Agent Contracts paper formalizes this: resource contracts with conservation laws ensure bounded execution without arbitrary structural limits.
+### Why a cycle cap (default 3) plus budget, not budget alone
 
-Budget-gating also composes cleanly with the outer DAG's budget allocation. The Coding Node's allocation is part of the DAG's total budget. Unspent budget returns to the reserve pool. Over-consumed budget triggers the standard exhaustion behavior (Policy 09, P8). No new budget mechanism is needed.
+Pure budget-gating sounds elegant — let the cycle run until it works or runs out of money — but it has a problem: it delays feedback to the Planning Node. A Coding Node that burns through 5 cycles on a bad approach wastes budget that the Planning Node could have used more productively after replanning at cycle 3.
+
+The insight is that the Coding Node and the Planning Node serve different functions when things go wrong. The Coding Node's cycle fixes *execution errors* (wrong syntax, missed edge case, off-by-one). The Planning Node fixes *approach errors* (wrong files targeted, missing context, bad decomposition). After 3 failed cycles, the problem is almost certainly an approach error, not an execution error. Continuing to cycle is like a programmer debugging for an hour when they should step back and reconsider their design.
+
+The default of 3 aligns with the diminishing-returns research: Reflexion and Self-Debugging both show the majority of recoverable failures are caught in the first retry, with steep drop-off after attempt 2-3. The cycle cap enforces this empirical ceiling while the Planner override (`max_cycles` per node) allows exceptions when the Planner has reason to believe more cycles are warranted.
+
+Budget remains as the secondary bound — it catches cases where individual cycles are expensive (large codebases, many test files) even if the cycle count is low.
 
 ### Why Review is not composited in the MVP (but should be)
 
@@ -383,6 +377,6 @@ The two sub-agents run in parallel (their concerns are independent), and a merge
 
 This decomposition is deferred to post-MVP for the same reason as the Planning Node decomposition: the single-agent approach is adequate for initial scope, and the composite node pattern provides the structural template when the time comes.
 
-### Why defer work preservation to post-MVP
+### Why no work preservation inside the Coding Node
 
-Work preservation within the Coding Node's cycle requires managing git state across sub-agent invocations, defining "forward progress" heuristics, implementing snapshot-aware restart logic, and handling merge conflicts. Each is solvable but unjustified until the system produces data on how often Coding Nodes fail mid-cycle. The Commit sub-agent's architectural slot ensures work preservation is a feature addition, not a redesign.
+Work preservation within the cycle would require managing git state across sub-agent invocations, defining "forward progress" heuristics, implementing snapshot-aware restart logic, and handling merge conflicts between the cycle's intermediate commits and the outer DAG's git operations. This complexity is not justified — the Coding Node either produces working code or it doesn't. If it fails, the outer DAG retries from clean inputs. If work preservation becomes necessary (e.g., complex issues where re-execution cost is high), it can be introduced as a cycle-level checkpointing mechanism without changing the node's external interface.

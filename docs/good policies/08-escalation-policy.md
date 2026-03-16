@@ -1,101 +1,73 @@
 # Escalation Policy
 
-## Background / State of the Art
+## Core Philosophy
 
-### The Problem
+### Issue In, PR Out
 
-Agent Agent's error-handling doc states that "persistent failures escalate to human" but
-does not define when, how, or through what channel. Without a concrete escalation policy,
-the system either escalates too often (causing human fatigue and eroding trust in
-autonomy) or too rarely (causing silent failures that waste budget and produce broken
-PRs). Both failure modes are well-documented in production agent systems and analogous
-domains like security operations centres.
+The system's contract is: accept a GitHub issue, produce a PR. Any human intervention
+between those two points means the system's policies, CLAUDE.md, or agent definitions
+were insufficient. Escalation is not a feature to be optimized — it is evidence of a
+policy gap that should be closed.
 
-### Research: When Should an Agent Escalate?
+This does not mean escalation never happens. It means every escalation is treated as a
+signal that something upstream needs fixing — a missing policy, an under-specified agent
+prompt, or an unhandled edge case. The goal is to drive the escalation rate toward zero
+by improving the system, not by suppressing alerts.
 
-The literature on human-in-the-loop AI systems converges on a set of escalation triggers
-that apply across domains (SOC alert triage, medical AI, customer service agents, and
-code-generation orchestrators):
+### The Cost That Matters
 
-**1. Confidence thresholds.** An agent should escalate when its confidence in a decision
-drops below a calibrated threshold. In practice this means the orchestrator (not the
-agent itself) evaluates structured signals: Did the agent's output pass validation? Did
-it hedge or express uncertainty? Did it produce a result that contradicts upstream
-context? The threshold must be tuned per agent type -- research agents have inherently
-lower confidence on ambiguous issues than test agents running deterministic checks.
+The traditional framing of escalation quality is FP/FN tradeoff: false escalations
+waste human attention, missed escalations let bad code through. But this framing treats
+both costs as symmetric. They are not.
 
-**2. Retry exhaustion.** After max retries with context enrichment, the agent has
-demonstrated that it cannot self-correct. Continuing to retry wastes budget and delays
-the human review that was always going to be needed. The error-handling doc already
-defines max retries per agent type (2-3); escalation is the mandatory next step after
-`dead_letter`.
+**The cost that dominates is shipping bad code.** A false escalation spends budget — the
+agent re-runs, the human glances at a message, the system burns tokens. That cost is
+bounded and recoverable. Shipped bad code has unbounded downstream cost: broken
+deployments, user-facing bugs, trust erosion, rollback effort.
 
-**3. Critical-path failure.** Not all node failures are equal. A failed node on the
-critical path (one with downstream dependents that cannot proceed without its output)
-is more urgent than a failed leaf node. The escalation urgency should reflect this.
+The system is best understood as a **variable-effort true-positive detector**: it
+expends compute to identify genuinely problematic outputs. As false positives increase,
+the detector's effectiveness degrades — not because the FPs themselves are costly, but
+because they consume the budget and attention that should go toward catching real
+problems. The practical failure mode is not "too many alerts" but "ran out of budget
+before finishing the job."
 
-**4. Budget exhaustion.** When a DAG run exhausts its token budget before completing,
-the human must decide whether to extend the budget, accept partial results, or abort.
-The system cannot make this call autonomously.
+### Optimize for Recall
 
-**5. Semantic failure.** The agent "succeeded" (returned a valid result) but the result
-is semantically suspect: empty diff, test suite that tests nothing, review that approves
-obviously broken code. These are harder to detect but critical to escalate because they
-represent silent failures that propagate downstream.
+Given asymmetric costs, the escalation policy **prioritizes recall (true positive rate)
+over precision**. The system should catch every genuinely problematic output, even if
+that means some false escalations. A flawed intermediate result that gets flagged and
+re-run is a budget cost. A flawed result that reaches the PR is a shipped-code cost.
 
-**6. Safety-boundary violations.** Any attempt by an agent to exceed its permissions,
-access blocked paths, or use blocked git flags should be escalated immediately, as it
-may indicate prompt injection or a fundamental misunderstanding of the task.
+Concretely:
+- When uncertain whether an output is problematic, **escalate** (flag for re-examination
+  or retry). The worst case is wasted tokens.
+- When uncertain whether an output is safe, **do not pass it downstream**. The worst
+  case of passing it is a bad PR.
+- Semantic anomaly checks (empty diffs, vacuous tests, contradictory reviews) should be
+  **sensitive, not specific**. A check that occasionally flags good output is preferable
+  to one that occasionally passes bad output.
 
-### The Cost of Getting It Wrong
+### Sting Operations (Future, Not MVP)
 
-**False escalations (over-escalation)** cause alert fatigue. Research from security
-operations shows that 62% of alerts are ignored when volume is high, and accuracy drops
-40% after extended shifts (IBM, 2025). In our context: if the system escalates on every
-transient API timeout or minor validation failure, the developer will stop reading
-escalation messages. The system's escalations become noise.
+To calibrate the detector's recall over time, the system can run **sting operations**:
+intentionally introduce changes that appear correct on the surface but contain genuine
+problems, then submit them through the normal review pipeline. These are not synthetic
+tests — they are real problematic changes routed through production-grade review.
 
-**Missed escalations (under-escalation)** cause silent failures. The agent proceeds with
-a flawed result, downstream agents build on it, and the developer discovers the problem
-only at PR review -- after the entire budget has been spent. Worse, if the developer has
-learned to trust the system, they may approve a broken PR (automation complacency, well-
-documented in human-AI collaboration research: Springer, 2025; Parasuraman & Manzey,
-2010).
+If the review pipeline catches them: the detector is working. If it doesn't: the
+detection policies need tightening.
 
-**The calibration goal:** escalate only when human judgment will change the outcome, and
-provide enough context that the human can act quickly without re-investigating from
-scratch.
+This mechanism addresses the fundamental calibration problem: you cannot measure recall
+without known-positive examples, and organic true positives are rare enough that the
+sample size is too small for statistical confidence.
 
-### How Leading Frameworks Handle Escalation
-
-**LangGraph** uses `interrupt()` to pause graph execution and return control to the
-caller. The graph state is fully serialized, so the pause can last indefinitely. Recent
-patterns include adaptive interrupts (escalate based on confidence), hierarchical
-approval (route to different reviewers by risk level), and timeout-with-default (proceed
-if no human response within N minutes).
-
-**AutoGen** supports three human-input modes (`NEVER`, `TERMINATE`, `ALWAYS`) and a
-`handoff` mechanism for permanent escalation to a human or specialist agent. The handoff
-pattern transfers full context and responsibility.
-
-**CrewAI** uses `human_input=True` per task and a hierarchical process where a manager
-agent can reassign failed tasks. When the manager hits its delegation limit, it returns
-partial results.
-
-**Common pattern across all three:** escalation is a state transition, not a crash. The
-system preserves its state, packages context for the human, and waits. The human can
-approve, modify, redirect, or abort. The system resumes from where it paused.
+**Not in MVP scope.** The escalation policy is designed to accommodate this mechanism
+when it is built, but no sting infrastructure is required for initial deployment.
 
 ### Graceful Degradation: Partial Results vs. Full Stop
 
-The software engineering principle of graceful degradation applies directly: a system
-that provides partial value under failure is better than one that provides nothing. In
-our context, if 3 of 5 DAG nodes completed successfully before a failure, those results
-(research findings, partial code changes, test results) have value and should be
-preserved and presented.
-
-The decision between "deliver partial results" and "full stop" depends on which node
-failed and what the partial results represent:
+When a failure occurs mid-DAG, completed work has value and should be preserved:
 
 - Research node failed, nothing downstream ran: full stop (no useful partial output).
 - Code node failed after research succeeded: escalate with research findings attached.
@@ -135,12 +107,15 @@ semantic sanity check:
 produces a DAG that the orchestrator determines is malformed (cycles, missing
 dependencies, nodes referencing non-existent agent types).
 
-The orchestrator MUST NOT escalate for:
-- Transient errors that are within retry budget (API rate limits, network timeouts)
-- Agent logic errors on first or second attempt (hallucinated tool calls, invalid output
-  format) -- these are retried with context enrichment first
-- Nodes that fail but have no downstream dependents (log the failure, mark as
-  `dead_letter`, continue)
+The orchestrator SHOULD NOT escalate for:
+- Transient infrastructure errors within retry budget (API rate limits, network timeouts)
+- Agent format errors on first attempt (hallucinated tool calls, invalid output schema)
+  — these are retried with context enrichment first
+
+Note: non-critical-path `dead_letter` nodes are logged but do NOT silently continue.
+Their outputs are flagged in the final PR description so the human reviewer has full
+visibility. The principle is: a flawed result that spends budget is acceptable; a flawed
+result that ships silently is not.
 
 ### 2. Escalation Decision Tree
 
@@ -275,7 +250,8 @@ logged to the event store.
 
 ### 7. Anti-Fatigue Measures
 
-To prevent escalation fatigue:
+Escalation fatigue is real, but the response is to fix the causes, not suppress the
+symptoms. These measures manage operational noise while preserving recall.
 
 **7.1 Batch non-urgent escalations.** If multiple non-critical nodes fail in the same
 DAG run, batch them into a single escalation message rather than interrupting the
@@ -285,14 +261,15 @@ human once per node.
 run within a 60-second window. If multiple triggers fire in rapid succession,
 consolidate them.
 
-**7.3 Escalation history informs future runs.** Track the human's response to each
-escalation (retry, skip, abort, guidance). If the human consistently skips a
-particular class of failure, surface this pattern and suggest adjusting retry policies
-or checkpoint levels.
+**7.3 Every escalation is a policy improvement signal.** Track the human's response to
+each escalation (retry, skip, abort, guidance). If the human consistently skips a
+particular class of failure, that class should be handled by policy — update the agent
+prompts, retry logic, or CLAUDE.md so the system handles it autonomously next time.
+The goal is to eliminate the escalation category, not to suppress it.
 
-**7.4 Never escalate for transient errors within retry budget.** This is the single
-most important anti-fatigue rule. API rate limits and network timeouts are handled
-silently by the retry policy.
+**7.4 Never escalate for transient infrastructure errors within retry budget.** API
+rate limits and network timeouts are handled silently by the retry policy. This is the
+only class of event that is unconditionally suppressed.
 
 ### 8. Post-Escalation Tracking
 
@@ -317,19 +294,23 @@ dead-letter states) and the human-checkpoints doc (which defines proactive appro
 gates). Escalation is the reactive counterpart: the system has tried to handle a
 problem autonomously and failed, and now needs human judgment.
 
-The decision tree is designed to minimize false escalations (the primary driver of human
-fatigue and automation distrust) while ensuring that critical failures, safety
-violations, and budget exhaustion always reach a human. The severity levels map to the
-developer's workflow: CRITICAL and HIGH interrupt immediately because the cost of delay
-exceeds the cost of interruption; MEDIUM and LOW are async because the human can batch
-their review without risk.
+**Recall-first design.** The decision tree is biased toward escalation when outcomes are
+uncertain. The cost asymmetry — budget-spend vs. shipped-bad-code — means the optimal
+operating point is high recall with tolerable false-positive rate, not the balanced
+precision/recall point that traditional alert systems target.
 
-The partial-results policy reflects the principle that completed work has value even when
-the full DAG cannot finish. A PR with 80% of the implementation is more useful than no
-PR at all, provided the human knows exactly what is missing.
+**Every escalation is a policy bug.** The anti-fatigue measures (batching, rate-limiting,
+filtering) are necessary for operational sanity, but they are band-aids. The real
+anti-fatigue strategy is to treat each escalation as a signal that a policy, prompt, or
+agent boundary needs improvement. Over time, the escalation rate should decrease not
+because alerts are suppressed, but because the system handles more cases autonomously.
 
-The anti-fatigue measures draw directly from alert-fatigue research in security
-operations, where high-volume, low-signal alerts cause operators to ignore critical
-events. By batching, rate-limiting, and filtering escalations, the system keeps its
-signal-to-noise ratio high enough that developers continue to trust and act on
-escalation messages.
+**Partial results preserve value.** A PR with 80% of the implementation is more useful
+than no PR at all, provided the human knows exactly what is missing. Completed node
+outputs are never discarded.
+
+**Sting-ready architecture.** The escalation tracking infrastructure (event logging,
+outcome measurement, recall metrics) is designed so that sting operations can be layered
+on without structural changes. When stings are implemented, the same event pipeline that
+records organic escalations will record sting results, enabling direct recall
+measurement.
