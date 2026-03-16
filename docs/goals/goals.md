@@ -1,5 +1,7 @@
 # Agent Agent — Goals
 
+This folder holds the single north-star document for Agent Agent. It defines what the system is, who it serves across three deployment modes, and what success looks like. All architecture and policy decisions should be evaluated against the goals here.
+
 ## What This System Is
 
 Agent Agent is a development team you run from a config file.
@@ -81,6 +83,46 @@ The system is designed to serve three distinct user types. They share the same e
 **The MVP implements Mode 1 only.**
 
 Modes 2 and 3 (Architecture Agent, Requirements drift handling, adjusted communication levels) are post-MVP. The dev team core must work well in isolation before upstream agents are worth building.
+
+---
+
+## MVP Distribution
+
+**The MVP is distributed as a Python package (PyPI) or a versioned GitHub release.**
+
+Users install and run Agent Agent against their own repositories — they do not clone this repo or inherit its internal docs and policies.
+
+### The Documentation Problem
+
+The docs and policies in this repository (`docs/policies/`, `docs/goals/`, etc.) encode decisions about *this codebase*. They are not portable artifacts. A user's target repo will have different architecture, constraints, stack choices, and review standards. Shipping this repo's docs as part of the package would be actively misleading.
+
+### Guided Bootstrap: The First-Run Agent
+
+Because Mode 1 requires a working `CLAUDE.md`, policies, and review standards to function, the system cannot simply start executing issues against a new repo. Instead, the MVP includes a **first-run bootstrap agent** that runs once before the dev team core is usable:
+
+**What the bootstrap agent does:**
+- Reads the target repository (structure, existing docs, language/framework, CI config)
+- Asks the user a short set of scoping questions (coding standards, review strictness, test expectations)
+- Generates a `CLAUDE.md`, initial policy set, and any other context files the orchestrator needs — scoped to *their* repo, not this one
+- Presents the generated context for user review and approval before any issue work begins
+
+**What the bootstrap agent does not do:**
+- Ship this repo's policies verbatim
+- Assume any architecture choices not present in the target repo
+- Proceed without the user approving the generated context
+
+The bootstrap output is stored in the user's repo (or a designated config location) and becomes the living context the orchestrator reads on every run. It can be re-run or amended as the project evolves.
+
+### Build Process
+
+Distributing as a package requires a build and release pipeline:
+
+- `pyproject.toml` defines the package (`agent-agent`, entry points for CLI and server)
+- The bootstrap agent and dev team core are both included in the package; the internal docs are not
+- Versioned GitHub releases (tags) drive PyPI publishes via CI
+- The CLI entry point (`agent-agent bootstrap`, `agent-agent run`) is the primary user interface for the MVP — the FastAPI server is an implementation detail, not the distribution surface
+
+**What failure looks like:** Users install the package and immediately try to run issues without bootstrapping. The system must detect missing context and redirect to the bootstrap agent rather than failing silently or using placeholder policies.
 
 ---
 

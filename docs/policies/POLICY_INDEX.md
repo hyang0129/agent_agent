@@ -12,18 +12,17 @@ All inter-node data MUST use these canonical Pydantic model names. Do not introd
 
 | Model | Produced By | Description |
 |-------|------------|-------------|
-| `ResearchOutput` | Research agent | Read-only analysis: affected files, root causes, constraints |
-| `CodeOutput` | Code agent and Programmer sub-agent | File changes, git state reference, local test results |
-| `TestOutput` | Test sub-agent (within Coding composite) | Test suite results, pass/fail status, assertion counts |
-| `ReviewOutput` | Review composite | Code quality evaluation, approval/rejection, structured findings |
-| `PlanOutput` | Plan composite | Either `null` (work complete) or a child DAG specification |
+| `PlanOutput` | Plan composite (ResearchPlannerOrchestrator) | Investigation summary + either `null` (work complete) or a child DAG specification |
+| `CodeOutput` | Coding composite — Programmer and Debugger sub-agents | File changes, git state reference, local test results |
+| `TestOutput` | Coding composite — Test Designer (plan) and Test Executor (results) | Test suite results, pass/fail status, assertion counts |
+| `ReviewOutput` | Review composite (Reviewer) | Code quality evaluation, approval/rejection, structured findings |
 
 ### System Models
 
 | Model | Used By | Description |
 |-------|---------|-------------|
 | `NodeResult` | Orchestrator | Wrapper: `output: AgentOutput`, `meta: ExecutionMeta` |
-| `AgentOutput` | All edges | Union: `ResearchOutput \| CodeOutput \| TestOutput \| ReviewOutput \| PlanOutput` |
+| `AgentOutput` | All edges | Union: `PlanOutput \| CodeOutput \| TestOutput \| ReviewOutput` |
 | `ExecutionMeta` | Orchestrator only | Timing, token usage, attempt number — never passed downstream |
 | `SharedContext` | Orchestrator (write) | Cross-cutting knowledge base, append-only |
 | `SharedContextView` | Agents (read-only) | Snapshot of `SharedContext` at dispatch time, capped at 25% of node budget |
@@ -61,9 +60,9 @@ The unit of work at each level is one reviewable commit: at most 3–5 files per
 
 ## [P03 — Agent Type Taxonomy](03-agent-type-taxonomy.md)
 
-Five agent types: Research (read-only analysis), Code (file writes + git within worktree), Test (run test suites, within Coding composite), Review composite (read-only evaluation), and Plan composite (orchestration). There is no separate Commit or git agent — the Code agent handles git within its Coding composite's isolated worktree; specific git permission boundaries will be defined post-MVP. The Plan composite is mandatory at every nesting level. Permissions are enforced at the tool layer. New types must pass a four-point checklist.
+Three composite types: Plan (ResearchPlannerOrchestrator sub-agent — research + planning in a single invocation), Coding (Programmer, Test Designer, Test Executor, Debugger sub-agents), and Review (Reviewer sub-agent). Sub-agents within a composite are not exposed to the DAG as separate nodes. There is no standalone Research agent type and no separate Commit or git composite — Programmer and Debugger handle git within their Coding composite's isolated worktree. The Plan composite is mandatory at every nesting level. Permissions are enforced at the tool layer. New composite types must pass a four-point checklist.
 
-**Violations include:** giving a Code agent the ability to create or comment on PRs; giving a Research agent file-write tools; creating a separate Commit or git agent; adding a new type without the four-point checklist; any agent merging PRs; a Plan composite writing source files directly.
+**Violations include:** giving Programmer or Debugger the ability to create or comment on PRs; giving ResearchPlannerOrchestrator file-write tools; creating a separate Commit or git composite; adding a new composite type without the four-point checklist; any sub-agent merging PRs; invoking a sub-agent from a composite it does not belong to; a ResearchPlannerOrchestrator writing source files directly.
 
 *See also: [P08 — Granular Agent Decomposition](#p08--granular-agent-decomposition) — permission enforcement and decomposition checklist for agent types.*
 
@@ -107,11 +106,11 @@ Every DAG run has a token budget set at creation time. The budget may be increas
 
 ## [P08 — Granular Agent Decomposition](08-granular-agent-decomposition.md)
 
-Every agent does exactly one kind of work. Code agents handle file writes and git within their isolated Coding composite worktree; PR creation is an orchestrator operation — no agent creates or merges PRs. Each Coding composite runs in its own git worktree, preventing mutations from affecting the primary checkout or other concurrent nodes. Permissions are enforced at the tool layer including argument validation. All tool calls — allowed or denied — are logged.
+Every sub-agent does exactly one kind of work. Programmer and Debugger sub-agents handle file writes and git within their isolated Coding composite worktree; PR creation is an orchestrator operation — no sub-agent creates or merges PRs. Each Coding composite runs in its own git worktree, preventing mutations from affecting the primary checkout or other concurrent nodes. Permissions are enforced at the tool layer including argument validation. All tool calls — allowed or denied — are logged.
 
-**Violations include:** any agent creating or merging PRs; Coding agents touching the primary checkout; enforcing permissions only in system prompts; omitting argument validation for dangerous tools; not logging denied tool calls.
+**Violations include:** any sub-agent creating or merging PRs; Programmer or Debugger touching the primary checkout; enforcing permissions only in system prompts; omitting argument validation for dangerous tools; not logging denied tool calls.
 
-*See also: [P01 — DAG Orchestration](#p01--dag-orchestration) — the push-on-exit requirement [P1.11] and worktree lifecycle are defined there. [P03 — Agent Type Taxonomy](#p03--agent-type-taxonomy) — canonical agent types and the four-point decomposition checklist.*
+*See also: [P01 — DAG Orchestration](#p01--dag-orchestration) — the push-on-exit requirement [P1.11] and worktree lifecycle are defined there. [P03 — Agent Type Taxonomy](#p03--agent-type-taxonomy) — canonical composite types and the four-point decomposition checklist.*
 
 ---
 

@@ -40,100 +40,11 @@ The MVP is a **task-level orchestrator**, manually initiated by a single develop
 
 ## Architecture
 
-```
-┌─────────────────────────────────────────────┐
-│                 FastAPI Server               │
-│                                              │
-│  ┌──────────┐   ┌───────────┐   ┌────────┐  │
-│  │  Issue    │──▶│  Planner  │──▶│  DAG   │  │
-│  │  Intake   │   │           │   │ Engine │  │
-│  └──────────┘   └───────────┘   └───┬────┘  │
-│                                     │        │
-│                    ┌────────────────┼──────┐ │
-│                    ▼        ▼       ▼      │ │
-│                 ┌──────┐ ┌──────┐ ┌──────┐ │ │
-│                 │Agent │ │Agent │ │Agent │ │ │
-│                 │  A   │ │  B   │ │  C   │ │ │
-│                 └──┬───┘ └──┬───┘ └──┬───┘ │ │
-│                    └────────┼───────┘      │ │
-│                             ▼              │ │
-│                       ┌───────────┐        │ │
-│                       │  Review   │        │ │
-│                       │  Agent(s) │        │ │
-│                       └─────┬─────┘        │ │
-│                             ▼              │ │
-│                       ┌───────────┐        │ │
-│                       │  PR       │        │ │
-│                       │  Assembly │        │ │
-│                       └───────────┘        │ │
-│                                            │ │
-│  ┌───────────────────────────────────────┐ │ │
-│  │          State Store (SQLite)         │ │ │
-│  └───────────────────────────────────────┘ │ │
-└─────────────────────────────────────────────┘
-```
+TBD
 
 ## Design Policies
 
-A **design policy** is a conceptual decision about how the system should be designed — a guiding principle that shapes architecture, agent boundaries, and implementation choices. Policies are not code; they are the reasoning behind the code. They exist so that future decisions stay consistent with past intent, even as the system grows.
-
-Each policy has a name, a statement of the principle, and the rationale behind it.
-
-### Maximum Agent Separation
-
-**Policy:** Decompose agent roles into the smallest independently-scoped units rather than combining capabilities into fewer, broader agents.
-
-**Rationale:** When an agent has multiple capabilities (e.g., writing code *and* committing to git), its failure modes multiply and its permissions become harder to reason about. By splitting an "implement" agent into a **coding agent** (file edits only) and a **git agent** (branch/commit operations only), each agent has a minimal permission surface, failures are isolated to one concern, and the DAG can retry or replace a single capability without re-running the other.
-
-**Applies to:** Agent type definitions, DAG decomposition, permission scoping.
-
----
-
-## Key Design Decisions
-
-### Error Handling & Recovery
-- Agents report structured success/failure results
-- Failed sub-tasks can be retried (configurable max retries)
-- Persistent failures escalate to human via CLI prompt
-- DAG state is checkpointed to SQLite so orchestration can resume after crashes
-
-### Context Passing
-- Each agent receives: the original issue, its sub-task description, and outputs from upstream DAG nodes
-- A shared context object accumulates discoveries (file mappings, root causes, design decisions)
-- Downstream agents inherit relevant upstream context automatically
-
-### Conflict Resolution
-- Parallel agents work on separate git branches
-- Orchestrator merges branches sequentially in dependency order
-- Merge conflicts trigger a resolution agent or escalate to human
-
-### Cost Controls
-- Configurable token/cost budget per task and per agent
-- Hard stop when budget is exceeded; partial results are preserved
-- Usage logged per agent for post-hoc analysis
-
-### Human Checkpoints
-- MVP: human initiates task and reviews final PR
-- Optional: configurable approval gates at DAG stage transitions
-- All agent actions are logged for async human review
-
-### Agent Permissions
-- Agents are typed (research, implement, test, review) with scoped capabilities
-- Research agents: read-only codebase access, no git writes
-- Implement agents: branch creation, file edits, commits
-- Review agents: read-only + comment on PR
-- Test agents: can execute test suites, read-only to source
-
-### Observability
-- Structured JSON logging for all agent actions
-- DAG execution status viewable via CLI or API endpoint
-- Per-agent token usage and timing metrics
-
-### Dev vs Prod Separation
-- Environment profiles loaded from `.env.dev` / `.env.prod`
-- Dev: verbose logging, relaxed budgets, local git operations
-- Prod: structured logging, strict budgets, remote git operations
-- Single codebase, behavior controlled by `AGENT_AGENT_ENV` env var
+See docs 
 
 ## Tech Stack
 
@@ -149,15 +60,7 @@ Each policy has a name, a statement of the principle, and the rationale behind i
 
 Agent Agent is validated by pointing it at real GitHub issues on purpose-built test repositories. Each test repo is a realistic codebase with pre-written issues of known difficulty and known-correct solutions. The orchestrator's output (PRs) is evaluated against these known solutions.
 
-### Test Repositories
-
-| Repo | Domain | Why This Domain |
-|---|---|---|
-| **test-webstore** | Shopify-style e-commerce (Python) | CRUD-heavy, multi-model, payment/cart logic — tests breadth of code understanding |
-| **test-mailservice** | Gmail-style email service (Python) | Async processing, search indexing, auth — tests complex system interactions |
-| **test-agent-agent** | Previous version of agent_agent (Python) | Self-referential — tests ability to reason about orchestration and meta-architecture |
-
-See [docs/integration-testing.md](docs/integration-testing.md) for full testing principles and architecture.
+See docs/architecture
 
 ## Future Scope
 

@@ -1,6 +1,6 @@
 # Policy 08: Granular Agent Decomposition
 
-Every agent must do exactly one kind of work. The Code agent handles file writes and git operations within its isolated Coding composite worktree; PR creation is an orchestrator operation, not an agent operation — no agent is authorized to create or merge PRs. Permissions are enforced at the tool layer, not the prompt layer: each agent type receives only the tools it needs via the API, and the executor validates every tool call — including arguments — against the agent's permission profile before execution. Each Coding composite node receives its own isolated git worktree, so file mutations from one node cannot interfere with other concurrent nodes.
+Every sub-agent must do exactly one kind of work. The Programmer and Debugger sub-agents handle file writes and git operations within their Coding composite's isolated worktree; PR creation is an orchestrator operation, not a sub-agent operation — no sub-agent is authorized to create or merge PRs. Permissions are enforced at the tool layer, not the prompt layer: each sub-agent receives only the tools it needs via the API, and the executor validates every tool call — including arguments — against the sub-agent's permission profile before execution. Each Coding composite node receives its own isolated git worktree, so file mutations from one node cannot interfere with other concurrent nodes.
 
 ---
 
@@ -15,11 +15,11 @@ If an agent has responsibilities that span fundamentally different capability ar
 
 ### P8.2 Separate code production from PR creation
 
-The Code agent handles file writes and git operations (commits, pushes) within its Coding composite's isolated worktree. PR creation is an orchestrator operation triggered after all coding and review completes — it is not delegated to any agent. No agent is authorized to create or merge PRs.
+The Programmer and Debugger sub-agents handle file writes and git operations (commits, pushes) within their Coding composite's isolated worktree. PR creation is an orchestrator operation triggered after all coding and review completes — it is not delegated to any sub-agent. No sub-agent is authorized to create or merge PRs.
 
 This separation ensures that no hallucination or error in a coding step can produce an irreversible, publicly-visible artifact without passing through the Review composite and the orchestrator's PR creation gate.
 
-Specific per-operation git permission boundaries within Coding composite nodes will be defined post-MVP [P3.2].
+Specific per-operation git permission boundaries within Coding composite nodes will be defined post-MVP [P3.6].
 
 ### P8.3 The Coding composite node receives its own isolated working tree
 
@@ -51,20 +51,20 @@ Every tool call, regardless of whether it is allowed, MUST be logged with: agent
 
 ### Violations
 
-- Any agent that can both write source files and create or merge PRs.
-- Coding agents that write to the primary git checkout instead of their isolated worktree.
+- Any sub-agent that can both write source files and create or merge PRs.
+- Programmer or Debugger sub-agents that write to the primary git checkout instead of their isolated worktree.
 - Enforcing permissions only in system prompts without tool-layer validation.
 - Omitting argument validation for dangerous tools [P8.5].
 - Not logging denied tool calls [P8.6].
-- An agent creating a PR directly (PR creation is an orchestrator operation only).
+- A sub-agent creating a PR directly (PR creation is an orchestrator operation only).
 
 ### Quick Reference
 
 | Concern | Owner | Notes |
 |---------|-------|-------|
-| File writes | Code agent (in worktree) | Isolated per Coding composite |
-| Git commit/push | Code agent (in worktree) | Pushes to remote on node exit [P1.11] |
-| PR creation | Orchestrator only | Not delegated to any agent |
-| PR merge | Human only | Agents never merge |
+| File writes | Programmer / Debugger (in worktree) | Isolated per Coding composite |
+| Git commit/push | Programmer / Debugger (in worktree) | Pushes to remote on node exit [P1.11] |
+| PR creation | Orchestrator only | Not delegated to any sub-agent |
+| PR merge | Human only | Sub-agents never merge |
 | Permission enforcement | Tool layer + argument validation | Prompt-layer guidance alone is insufficient |
 | Tool call audit | All calls, allowed and denied | Denied calls flagged as potential misconfig or injection |

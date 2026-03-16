@@ -2,7 +2,9 @@
 
 ## Project Overview
 
-Agent Agent is a Claude-powered orchestrator that resolves GitHub issues by decomposing them into sub-task DAGs and assigning specialized agents to execute each node. The MVP is a locally-run FastAPI server for single-developer use.
+Agent Agent is a Claude-powered orchestrator that resolves GitHub issues by decomposing them into sub-task DAGs and assigning specialized agents to execute each node.
+
+**Distribution:** The MVP ships as a Python package (PyPI / GitHub release) with a CLI entry point (`agent-agent bootstrap`, `agent-agent run`). The FastAPI server is an implementation detail, not the user-facing surface. Users run the bootstrap agent once against their target repo to generate a `CLAUDE.md` and policy set scoped to that repo — the docs in *this* repository are internal development artifacts and are not shipped to users. See `docs/goals/goals.md` § MVP Distribution for the full rationale.
 
 ## Repository Structure
 
@@ -35,86 +37,57 @@ agent_agent/
 └── readme.md
 ```
 
+## Setup
+
+See [docs/setup.md](docs/setup.md) for prerequisites, install steps, and environment configuration.
+
 ## Commands
 
 ```bash
-# Activate venv
-source /workspaces/.venvs/agent_agent/bin/activate
-
-# Install dependencies (editable)
-pip install -e ".[dev]"
-
-# Run the server (dev)
-AGENT_AGENT_ENV=dev uvicorn agent_agent.server:app --reload --port 8100
-
-# Run tests
-pytest tests/
-
-# Type checking
-mypy src/agent_agent/
-
-# Linting
-ruff check src/ tests/
-ruff format src/ tests/
+source /workspaces/.venvs/agent_agent/bin/activate  # activate venv
+AGENT_AGENT_ENV=dev uvicorn agent_agent.server:app --reload --port 8100  # run server
+pytest tests/          # tests
+mypy src/agent_agent/  # type check
+ruff check src/ tests/ # lint
+ruff format src/ tests/ # format
 ```
 
-## Development Rules
+## IMPORTANT: Architecture, Design, and Review Work
 
-### Code Style
+Before making any architectural decision, adding a new agent type, changing DAG structure, modifying context flow, scoping agent permissions, or **reviewing any design or implementation** — adhere to policies, follow best practices, and verify alignment with goals. Read the relevant indexes first:
+
+- **Goals:** `docs/goals/goals.md` — what the system is trying to achieve; every decision must align with these
+- **Policies:** `docs/policies/POLICY_INDEX.md` — active design policies (P1–P11); every architectural and design decision must be checked against the relevant policies
+- **Best Practices:** `docs/best-practices/INDEX.md` — implementation guidance for recurring concerns; follow these unless a policy overrides
+
+For additional documentation (architecture decisions, ADRs, etc.) see `docs/claude.md`.
+
+Policies are not optional commentary. They encode decisions that were made deliberately. If your implementation conflicts with a policy, resolve the conflict explicitly — either by changing the implementation or by proposing a policy update.
+
+## Code Style
+
 - Python 3.11, type hints on all public functions
 - Pydantic v2 for all data models and config
 - async/await throughout (FastAPI + async Claude SDK calls)
 - Ruff for linting and formatting (pyproject.toml has config)
 
-### Design Policies
+## Architectural Invariants
 
-A **design policy** is a conceptual decision about how the system should be designed — a guiding principle that shapes architecture, agent boundaries, and implementation choices. Policies are the reasoning behind the code. When making implementation decisions, check that they align with active policies.
+These are absolute. No policy or task overrides them:
 
-- **Maximum Agent Separation** — decompose agent roles into the smallest independently-scoped units rather than combining capabilities into fewer, broader agents. For example, an "implement" agent is split into a coding agent (file edits) and a git agent (branch/commit), so each has minimal permissions and isolated failure modes. Apply this when defining agent types, scoping permissions, or decomposing DAG nodes.
-
-### Architecture Principles
 - **Agents are stateless** — all state lives in the orchestrator's SQLite store
-- **DAG nodes are the unit of work** — each node maps to exactly one agent invocation
 - **Context flows forward only** — upstream outputs feed downstream inputs, never backwards
 - **Fail loudly** — agents return structured results with explicit success/failure; never swallow errors
-- **Budget-aware** — every agent call tracks token usage; orchestrator enforces limits
+- **Orchestrator is the sole writer to shared context** — agents propose discoveries; the orchestrator validates and commits them
+- **Never operate on the live installation directory** — the orchestrator rejects `--repo` paths that resolve to its own working tree. To use agent_agent to improve itself, clone the repo to a separate directory and pass that clone as `--repo`.
 
-### Git Workflow
-- All agent-generated code goes on feature branches: `agent/<issue-number>/<short-description>`
-- The orchestrator creates the branch, agents commit to it, review agents comment
+## Git
+
+- Agent-generated code branches: `agent/<issue-number>/<short-description>`
+- The orchestrator creates the branch; agents commit to it; review agents comment
 - PRs are created against the target repo's default branch
-- Human merges — agents never merge to main
+- **Agents never merge to main** — human merges only
 
-### Testing
-- Unit tests for DAG logic, context passing, and state persistence
-- Integration tests mock the Claude API (use `pytest-httpx` or similar)
-- E2E tests run against a test repo with real GitHub API calls (requires `GITHUB_TOKEN`)
+## Key Dependencies
 
-### Config & Environment
-- `AGENT_AGENT_ENV` controls which `.env.*` file loads (default: `dev`)
-- Dev config: verbose logging, higher token budgets, `--reload` friendly
-- Sensitive values (`ANTHROPIC_API_KEY`, `GITHUB_TOKEN`) come from env vars, never committed
-
-### Key Dependencies
-- `anthropic` — Claude API client
-- `fastapi` + `uvicorn` — API server
-- `networkx` — DAG operations
-- `pydantic` + `pydantic-settings` — models and config
-- `aiosqlite` — async SQLite for state persistence
-- `httpx` — async HTTP client (GitHub API)
-
-## Important Patterns
-
-### Agent Execution
-Agents are invoked via the Anthropic SDK, not via Claude Code CLI. Each agent type has a system prompt template that scopes its capabilities and provides task context.
-
-### Error Handling
-- Agent failures are caught and recorded in state store
-- Configurable retry count per node (default: 2)
-- After max retries, node is marked `failed` and orchestrator decides: skip dependents, or escalate
-- Orchestrator crash recovery: on startup, check for incomplete DAGs in SQLite and offer to resume
-
-### GitHub Integration
-- Use `httpx` with GitHub REST API for programmatic access (issues, PRs, comments)
-- Use `gh` CLI as fallback for operations that are simpler via CLI
-- All GitHub operations are idempotent where possible (check before create)
+See [docs/architecture/dependencies.md](docs/architecture/dependencies.md).
