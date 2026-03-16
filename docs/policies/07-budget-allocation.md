@@ -28,9 +28,11 @@ Each composite node is responsible for dividing its budget among its children. T
 
 Type-weighted distribution (Research nodes get less than Code nodes) is a reasonable default, but actual weights need calibration through real workloads. The system MUST log allocation vs. actual usage per node type to inform tuning.
 
-### P7.4 Never terminate an active node for budget reasons
+### P7.4 Never interrupt an active node for budget reasons
 
-An active node (one that has started executing) is never killed mid-execution. Instead, when a node's budget is exhausted, it is allowed to complete its current API call and then **frozen** — marked as complete so downstream nodes can consume its output.
+An active node (one that has started executing) is always allowed to run to completion, regardless of its budget allocation or the run-level budget state. Budget allocations are soft limits — they guide `max_tokens` at call time, but once a node is dispatched, it is never killed, interrupted, or frozen mid-execution.
+
+When a node finishes execution after exceeding its allocation, it is marked `frozen_at_budget` and its output is preserved normally. Freezing happens at node boundaries only — never within a node.
 
 ### P7.5 Frozen nodes emit their output normally
 
@@ -53,9 +55,9 @@ When the decision is to stop:
 - [P7.6] fires next: at 5% remaining, stage-aware evaluation determines whether to continue or stop.
 - [P6.1b] fires last: if stage-aware evaluation decides to stop, escalate to human for disposition.
 
-### P7.7 Every API call sets `max_tokens` to the lesser of the model's maximum and the node's remaining allocation
+### P7.7 Every API call sets `max_tokens` to the model's maximum
 
-This is the only server-enforced budget mechanism. As a node approaches its limit, `max_tokens` decreases, naturally encouraging more concise output.
+Nodes always run to completion. `max_tokens` is set to the model's maximum on every call — not the node's remaining allocation. The budget allocation per node informs scheduling decisions and post-run analysis but does not constrain individual API calls.
 
 ### P7.8 All allocation and freeze events are logged as structured budget events
 
@@ -83,8 +85,8 @@ When a DAG run is stopped due to budget exhaustion, a separate post-mortem proce
 ### Violations
 
 - The orchestrator increasing the budget autonomously without human approval.
-- Killing an active node mid-execution for budget reasons (freeze after current call only).
-- Not setting `max_tokens` on every API call.
+- Interrupting or killing an active node mid-execution for any budget reason.
+- Setting `max_tokens` to anything less than the model's maximum.
 - Starting a new implementation or planning stage when the budget is within 5% of exhaustion [P7.6].
 - Not logging allocation or increase events as `BudgetEvent` records.
 
@@ -94,8 +96,8 @@ When a DAG run is stopped due to budget exhaustion, a separate post-mortem proce
 |-----------|---------|-------|
 | Top-level budget | Set per complexity tier | May be increased via human approval only |
 | Composite node allocation | Parent subdivides | Local strategy per composite |
-| Active node termination | Never | Freeze after current call completes [P7.4] |
+| Active node interruption | Never | Always run to completion; freeze at node boundary [P7.4] |
 | Stage-aware stop threshold | 5% remaining | Continue for review; stop for planning/impl [P7.6] |
-| `max_tokens` per request | min(model max, node remaining) | Server-enforced [P7.7] |
+| `max_tokens` per request | Model maximum | Nodes always run to completion [P7.7] |
 | Budget event logging | All events including increases | Required for weight tuning [P7.8] |
 | Post-mortem | Beyond MVP | Design for it now [P7.9] |

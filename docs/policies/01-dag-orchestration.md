@@ -17,7 +17,7 @@ Each level of the hierarchy is an independent, immutable, acyclic graph. Iterati
 **Level 1 and beyond** follow the structure:
 
 ```
-Coding composite(s) → [Integration node] → Review composite → Plan composite
+Coding composite(s) → Review composite(s) → Plan composite
 ```
 
 The terminal **Plan composite** is the sole decision point at each level. It either:
@@ -38,9 +38,9 @@ When a level's work requires parallel coding branches:
 ```
 [Plan composite — parent level]
   └─ child DAG:
-       ├─ Coding composite (module_a) ─────┐
-       ├─ Coding composite (module_b) ─────┤
-       └───────────────────────────────────→ [Integration] → Review composite → [Plan composite]
+       ├─ Coding composite (module_a) → Review composite (module_a) ─┐
+       ├─ Coding composite (module_b) → Review composite (module_b) ─┤
+       └──────────────────────────────────────────────────────────────→ [Plan composite]
 ```
 
 ### P1.3 DAGs MUST be acyclic at every nesting level
@@ -61,7 +61,7 @@ No implicit dependencies. If node B needs output from node A, there must be a di
 
 ### P1.6 Every parallel branch MUST converge into the terminal Plan composite
 
-When a child DAG contains parallel Coding composites, every branch must converge through the optional Integration node and the Review composite into the single terminal Plan composite. No branch may terminate at any other node.
+When a child DAG contains parallel Coding composites, every branch must converge (through its paired Review composite) into the single terminal Plan composite. No branch may terminate at any other node.
 
 ### P1.7 Every node MUST produce a typed, structured output
 
@@ -102,7 +102,7 @@ When a Coding composite node exits — whether on success, failure, or resource 
 | Constraint | Value | Enforcement |
 |-----------|-------|-------------|
 | L0 structure | Single Plan composite node | Orchestrator validates |
-| L1+ structure | Coding composite(s) → [Integration] → Review composite → Plan composite | Planner output validation |
+| L1+ structure | Coding composite(s) → Review composite(s) → Plan composite | Planner output validation |
 | Max nesting depth | 4 levels (L0–L3) | Hard cap, orchestrator enforced |
 | Intra-level parallelism | Allowed (concurrent Coding composites) | Configurable concurrency limit |
 | Cross-level parallelism | Prohibited | Structural — convergence required before next level |

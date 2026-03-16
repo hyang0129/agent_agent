@@ -7,12 +7,16 @@ name = "agent-agent"
 version = "0.1.0"
 requires-python = ">=3.11"
 dependencies = [
-    "pydantic>=2.0",
+    "pydantic>=2.9",
+    "pydantic-settings>=2.0",
+    "aiosqlite>=0.20",
+    "structlog>=24.0",
 ]
 
 [project.optional-dependencies]
 dev = [
     "pytest>=8.0",
+    "pytest-asyncio>=0.24",
     "ruff>=0.4",
     "mypy>=1.10",
 ]
@@ -30,3 +34,4 @@ strict = true
 
 [tool.pytest.ini_options]
 testpaths = ["tests"]
+asyncio_mode = "auto"

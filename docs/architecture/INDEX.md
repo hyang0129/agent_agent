@@ -6,7 +6,9 @@ This directory documents architectural decisions, subsystem designs, and testing
 
 | Document | Summary |
 |----------|---------|
+| [implementation-plan.md](implementation-plan.md) | Phased build plan for the MVP: 6 phases from foundation to hardened end-to-end, with deliverables, test gates, and fixture spec. Keywords: implementation, phases, build order, deliverables, test gates, fixtures. |
 | [mvp-architecture.md](mvp-architecture.md) | Defines the end-to-end Mode 1 MVP architecture: CLI, bootstrap agent, orchestrator, DAG engine, agent types, composite internals, context system, GitHub integration, merge integration, budget, escalation, checkpoints, and observability. Keywords: MVP, architecture, orchestrator, DAG, composite, executor, context, budget, observability. |
+| [data-models.md](data-models.md) | Canonical Pydantic model definitions for all agent output types, discovery types, ChildDAGSpec, NodeContext, SharedContext, and NodeResult. Reference this before implementing any model. Keywords: Pydantic, models, PlanOutput, CodeOutput, TestOutput, ReviewOutput, ChildDAGSpec, NodeContext, discoveries. |
 | [integration-testing.md](integration-testing.md) | Defines the end-to-end test strategy using three purpose-built repos, tiered issue types, a 0–3 scoring rubric, and regression tracking to validate autonomous issue resolution. Keywords: integration testing, test repos, evaluation, scoring, regression, architecture. |
 
 ## Relationship to Other Docs

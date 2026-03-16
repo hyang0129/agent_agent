@@ -98,16 +98,18 @@ Max transient retries per sub-agent invocation: 3. After 3 transient retries, re
 
 ### P10.9 Re-invocation limits
 
-| Node / Agent | Max Attempts (for Agent Error) |
-|---|---|
-| Planner (MVP) | 2 |
-| Programmer | 2 |
-| Test Designer | 2 |
-| Test Executor | 1 |
-| Debugger | 2 |
-| Review | 2 |
+Every node gets at most **1 re-invocation** after failure. The decision to re-invoke vs. escalate immediately is based on failure classification [P10.7]:
 
-These limits apply to **Agent Error** re-invocations only. Transient retries [P10.8] and Safety Violations [P10.7] are governed by separate rules.
+| Failure category | Action |
+|---|---|
+| Transient | Re-invoke with backoff (up to 3 transient retries per sub-agent — not counted against the 1-rerun limit) |
+| Agent Error | Re-invoke once with full failure context. If it fails again, escalate. |
+| Resource Exhaustion | Escalate immediately. No rerun. |
+| Deterministic | Escalate immediately. No rerun. |
+| Safety Violation | Escalate immediately. No rerun. |
+| Unknown | Re-invoke once with context. If it fails again, escalate. |
+
+The 1-rerun limit applies uniformly across all agent types. Transient retries [P10.8] are separate and do not consume the rerun.
 
 ### P10.10 The DAG is the collaboration mechanism
 
@@ -167,7 +169,7 @@ Each Coding composite executes in its own git worktree [P8.3], providing filesys
 | Composite node types | Plan composite, Coding composite, Review composite | Internal structure opaque to outer DAG |
 | Max Coding composite cycles | 3 | Cycle-cap exhaustion = Resource Exhaustion |
 | Iteration caps | Planner 50, Programmer 40, Test Designer/Debugger 20, Test Executor 15, Review 20 | Hitting cap = Resource Exhaustion |
-| Agent Error re-invocation limit | 2 (most agents), 1 (Test Executor) | Per node; see [P10.9] |
+| Agent Error re-invocation limit | 1 (all agents) | Per node; see [P10.9] |
 | Transient retry limit | 3 per sub-agent invocation | Then reclassify as Deterministic |
 | Safety violation response | Escalate immediately, no retry | [P6.1d] |
 | Blind re-invocation | Prohibited | Must include concrete failure context [P10.12] |

@@ -40,7 +40,7 @@ All inter-node data MUST use these canonical Pydantic model names. Do not introd
 
 ## [P01 — DAG Orchestration](01-dag-orchestration.md)
 
-Every issue resolution runs as an immutable, recursively nested DAG. The Plan composite node is the orchestration primitive at every level. Level 0 is a single Plan composite; Level 1+ follows the structure: Coding composite(s) → [Integration] → Review composite → Plan composite. DAGs are never mutated — adaptation happens by spawning a new child DAG from the terminal Plan composite. Nesting is hard-capped at 4 levels. Parallelism is intra-level only (concurrent Coding composites within a level). Every DAG is persisted before execution begins. When a Coding composite exits (success or failure), it pushes all in-progress changes to its remote branch.
+Every issue resolution runs as an immutable, recursively nested DAG. The Plan composite node is the orchestration primitive at every level. Level 0 is a single Plan composite; Level 1+ follows the structure: Coding composite(s) → Review composite(s) → Plan composite. DAGs are never mutated — adaptation happens by spawning a new child DAG from the terminal Plan composite. Nesting is hard-capped at 4 levels. Parallelism is intra-level only (concurrent Coding composites within a level). Every DAG is persisted before execution begins. When a Coding composite exits (success or failure), it pushes all in-progress changes to its remote branch.
 
 **Violations include:** mutating a DAG in place; a branch terminating at any node other than the terminal Plan composite; spawning multiple child DAGs from one level; executing before the DAG is persisted; a Coding composite exiting without pushing to remote; nesting beyond 4 levels without escalating.
 
@@ -50,9 +50,9 @@ Every issue resolution runs as an immutable, recursively nested DAG. The Plan co
 
 ## [P02 — Sub-task Decomposition](02-subtask-decomposition.md)
 
-The unit of work at each level is one reviewable commit: at most 3–5 files per Coding composite branch with a clear completion criterion. The Plan composite targets 2–5 parallel Coding composites per level; 6–7 requires justification; 8+ is rejected by the orchestrator. A branch is justified when it meets at least two of: different capability required, different scope/files, independent verifiability, failure isolation, or different blast radius. An Integration node is required when parallel branches touch overlapping concerns. The Review composite and terminal Plan composite are structural — not decomposition choices.
+The unit of work at each level is one reviewable commit: at most 3–5 files per Coding composite branch with a clear completion criterion. The Plan composite targets 2–5 parallel Coding composites per level; 6–7 requires justification; 8+ is rejected by the orchestrator. A branch is justified when it meets at least two of: different capability required, different scope/files, independent verifiability, failure isolation, or different blast radius. The Review composite and terminal Plan composite are structural — not decomposition choices.
 
-**Violations include:** producing a child DAG with 8+ parallel Coding composites; a child DAG with 7 Coding composites without documented justification; omitting an Integration node when branches share imports or API contracts; decomposing a change that fits in under 200 words and 3 files; omitting the Review composite or Plan composite from an L1+ DAG.
+**Violations include:** producing a child DAG with 8+ parallel Coding composites; a child DAG with 7 Coding composites without documented justification; decomposing a change that fits in under 200 words and 3 files; omitting the Review composite or Plan composite from an L1+ DAG.
 
 *Note: The 7-composite limit is a hard stop — implementation must determine the appropriate threshold empirically before MVP.*
 
@@ -65,14 +65,6 @@ Three composite types: Plan (ResearchPlannerOrchestrator sub-agent — research 
 **Violations include:** giving Programmer or Debugger the ability to create or comment on PRs; giving ResearchPlannerOrchestrator file-write tools; creating a separate Commit or git composite; adding a new composite type without the four-point checklist; any sub-agent merging PRs; invoking a sub-agent from a composite it does not belong to; a ResearchPlannerOrchestrator writing source files directly.
 
 *See also: [P08 — Granular Agent Decomposition](#p08--granular-agent-decomposition) — permission enforcement and decomposition checklist for agent types.*
-
----
-
-## [P04 — Merge Integration](04-merge-integration.md)
-
-When parallel Coding composite branches complete, merge them sequentially in topological DAG order (foundational files before leaf files as the tiebreaker for independent branches). Each branch is rebased onto the accumulated target before merging. The full test suite runs after every individual merge. Conflicts escalate through a tiered sequence: trivial auto-resolve → AST-aware merge (tree-sitter) → LLM resolution agent → triage agent selects which branch to rebuild → rebuild → human escalation. Rebuild is capped at **1 per branch by default** (configurable via `max_rebuilds_per_branch`). Agent branches are never force-pushed.
-
-**Violations include:** merging branches in arbitrary order; skipping tests after a merge; using octopus merge; force-pushing agent branches; going directly to human escalation without attempting the tiered resolution sequence; exceeding `max_rebuilds_per_branch` without escalating.
 
 ---
 
@@ -96,9 +88,9 @@ All nodes are on the critical path — every level converges into the terminal P
 
 ## [P07 — Budget Allocation](07-budget-allocation.md)
 
-Every DAG run has a token budget set at creation time. The budget may be increased via human-approved escalation [P6.4] or mid-execution budget pause [P9.6]; the orchestrator never increases it autonomously. Budget flows top-down: composite nodes receive a share and re-allocate to children. Active nodes are never terminated — frozen after the current API call (`frozen_at_budget`). At 5% remaining, stage-aware evaluation: continue for review stages, stop for planning/implementation stages, then escalate [P6.1b]. All budget events (including increases) are logged.
+Every DAG run has a token budget set at creation time. The budget may be increased via human-approved escalation [P6.4] or mid-execution budget pause [P9.5]; the orchestrator never increases it autonomously. Budget flows top-down: composite nodes receive a share and re-allocate to children. Active nodes are never interrupted — once a node starts, it runs to completion regardless of budget state; freezing happens at node boundaries only (`frozen_at_budget`). `max_tokens` is always set to the model's maximum. At 5% remaining, stage-aware evaluation: continue for review stages, stop for planning/implementation stages, then escalate [P6.1b]. All budget events (including increases) are logged.
 
-**Violations include:** the orchestrator increasing the budget autonomously; killing an active node mid-execution; not setting `max_tokens` per API call; starting an implementation or planning stage at 5% remaining budget; not logging budget events.
+**Violations include:** the orchestrator increasing the budget autonomously; interrupting an active node for budget reasons; setting `max_tokens` below the model maximum; starting an implementation or planning stage at 5% remaining budget; not logging budget events.
 
 *See also: [P05 — Context Management](#p05--context-management) — the `SharedContextView` is capped at 25% of the node's budget allocation.*
 
@@ -116,7 +108,7 @@ Every sub-agent does exactly one kind of work. Programmer and Debugger sub-agent
 
 ## [P09 — Minimal Interactive Oversight](09-minimal-interactive-oversight.md)
 
-Human involvement is limited to two planned checkpoints: (1) issue approval, where an investigation agent presents its understanding before any planning begins, and (2) PR review after execution completes. Between those checkpoints, execution is fully autonomous. Mid-execution pauses are allowed only for genuine policy conflicts or projected budget overruns. Every pause must produce a **durable fix** — specifically: a policy document update, a CLAUDE.md edit, or a written scope clarification committed to the state store. A one-off verbal answer does not satisfy this requirement. A rejected PR triggers a structured improvement loop.
+Human involvement is limited to one planned checkpoint: a branch/PR review after execution completes. Execution is fully autonomous from run start until that checkpoint. Mid-execution pauses are allowed only for genuine policy conflicts or projected budget overruns. Every pause must produce a **durable fix** — specifically: a policy document update, a CLAUDE.md edit, or a written scope clarification committed to the state store. A one-off verbal answer does not satisfy this requirement. A rejected review triggers a structured improvement loop. MVP: no GitHub PR; orchestrator surfaces the finished branch name and summary for local review.
 
 **Violations include:** pausing mid-execution for a decision that existing policies already cover; pausing for routine uncertainty without a clear policy gap; producing a one-off answer from a pause without updating a policy document or CLAUDE.md; allowing a run to accumulate more than 2 approval pauses without triggering the improvement loop.
 
@@ -124,9 +116,9 @@ Human involvement is limited to two planned checkpoints: (1) issue approval, whe
 
 ## [P10 — Node Execution Model](10-node-execution-model.md)
 
-Each DAG node maps to exactly one agent invocation bounded by a per-agent iteration cap. The caps listed in the full policy (Planner: 50, Programmer: 40, Test Designer/Debugger: 20, Test Executor: 15, Review: 20) are **conceptual placeholders** — the actual values must be determined empirically before MVP ships and encoded in config. Three composite node types: Plan composite, Coding composite, Review composite. The Coding composite's internal cyclic DAG (Programmer → Test Designer → Test Executor → Debugger, max 3 cycles) is treated as an unrolled DAG with persisted sub-agent outputs, enabling resumption from the last completed sub-agent. Every failure must be classified as: Transient (retry with backoff), Agent Error (re-invoke with context), Resource Exhaustion (stop, preserve output), Deterministic (escalate immediately), or Safety Violation (escalate immediately, no retry). Blind re-invocations without concrete failure context are prohibited.
+Each DAG node maps to exactly one agent invocation bounded by a per-agent iteration cap. Three composite node types: Plan composite, Coding composite, Review composite. The Coding composite's internal cyclic DAG (Programmer → Test Designer → Test Executor → Debugger, max 3 cycles) is treated as an unrolled DAG with persisted sub-agent outputs, enabling resumption from the last completed sub-agent. Every failure must be classified before responding: Transient (retry with backoff, up to 3 per sub-agent), Agent Error (re-invoke once with full failure context), Resource Exhaustion (escalate immediately), Deterministic (escalate immediately), or Safety Violation (escalate immediately, no retry). Max 1 rerun per node for Agent Error or Unknown failures. Blind re-invocations without concrete failure context are prohibited.
 
-**Violations include:** a node spawning multiple agents; re-invoking a composite node from scratch when a sub-agent fails; re-invoking with "try again" without concrete error evidence; treating cycle-cap exhaustion as an Agent Error; retrying after a Safety Violation; exceeding iteration caps without treating them as Resource Exhaustion; hardcoding iteration caps instead of reading from config.
+**Violations include:** a node spawning multiple agents; re-invoking a composite node from scratch when a sub-agent fails; re-invoking with "try again" without concrete error evidence; treating cycle-cap exhaustion as an Agent Error; retrying after a Safety Violation; exceeding the 1-rerun limit; exceeding iteration caps without treating it as Resource Exhaustion.
 
 ---
 

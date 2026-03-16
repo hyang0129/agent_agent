@@ -13,28 +13,33 @@ agent_agent/
 ├── src/
 │   └── agent_agent/
 │       ├── __init__.py
-│       ├── server.py          # FastAPI app entry point
 │       ├── config.py          # Pydantic settings, env profile loading
-│       ├── models/            # Pydantic models (tasks, agents, DAG nodes)
-│       ├── orchestrator/      # Core orchestration logic
-│       │   ├── planner.py     # Issue analysis → sub-task DAG
-│       │   ├── dag.py         # DAG construction, traversal, state
-│       │   └── executor.py    # Agent dispatch and result collection
-│       ├── agents/            # Agent type definitions and prompts
-│       │   ├── base.py        # Base agent interface
-│       │   ├── research.py    # Read-only codebase analysis
-│       │   ├── implement.py   # Code changes
-│       │   ├── test.py        # Test execution and validation
-│       │   └── review.py      # Code review
+│       ├── models/            # Pydantic models: agent outputs, context, DAG, budget, escalation
+│       ├── state.py           # SQLite schema + async CRUD (aiosqlite); all 6 tables
+│       ├── budget.py          # BudgetManager: top-down allocation, 25% cap, 5% threshold
+│       ├── dag/               # DAG engine and executor
+│       │   ├── engine.py      # DAGRun construction, topological traversal
+│       │   └── executor.py    # Dispatch loop, NodeContext assembly, failure classification
+│       ├── context/           # Context assembly and shared state write protocol
+│       │   ├── provider.py    # ContextProvider: assembles NodeContext, enforces 25% cap
+│       │   └── shared.py      # SharedContext write protocol: discovery validation + append
+│       ├── worktree.py        # WorktreeManager: git worktree add/remove for composites
+│       ├── agents/            # Agent composites (Phase 4+)
+│       │   ├── base.py        # invoke_agent wrapper; enforces iteration cap
+│       │   ├── plan.py        # ResearchPlannerOrchestrator
+│       │   ├── coding.py      # CodingComposite: Programmer → Test Designer → Debugger
+│       │   └── review.py      # ReviewComposite: read-only worktree review
 │       ├── github/            # GitHub integration (issues, PRs, branches)
-│       ├── context.py         # Shared context accumulator
-│       └── state.py           # SQLite state persistence
+│       │   └── client.py      # async httpx; DRY_RUN_GITHUB guard; branch protection check
+│       ├── cli.py             # typer CLI: run, status, bootstrap
+│       └── server.py          # FastAPI app: GET /dags/{id}/status
 ├── tests/
-├── .env.dev                   # Dev environment config
-├── .env.prod                  # Prod environment config
+│   ├── unit/                  # Pure Python, no I/O; AGENT_AGENT_ENV=test
+│   ├── component/             # Real git ops and HTTP mocks; AGENT_AGENT_ENV=test
+│   └── fixtures/              # template/ repo + conftest.py fixtures
 ├── pyproject.toml
-├── claude.md
-└── readme.md
+├── CLAUDE.md
+└── README.md
 ```
 
 ## Setup
