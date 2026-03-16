@@ -38,22 +38,16 @@ When a node finishes execution after exceeding its allocation, it is marked `fro
 
 A frozen node's output is treated identically to a node that completed within budget. Downstream nodes receive it, the state store records it, and the DAG continues. The only difference is metadata: the node is marked `frozen_at_budget` rather than `completed`.
 
-### P7.6 When the top-level budget is within 5% of exhaustion, evaluate whether continuing makes sense
+### P7.6 When the top-level budget is within 5% of exhaustion, pause the run
 
-Heuristics:
-- **Continue** if only review/validation stages remain — completing review on already-implemented work is high-value, low-cost.
-- **Stop** if we're back in a planning or implementation stage — 5% of budget is unlikely to produce a complete implementation.
+When the 5% threshold is reached, the executor sets `DAGRunStatus.PAUSED` and stops dispatching after the current node boundary. Pending nodes are left in `NodeStatus.PENDING` — they are not skipped or cancelled. The DAG is frozen at a clean node boundary; the run can be resumed or inspected without loss of state. Escalate to human [P6.1b] with a summary of what completed, what is pending, tokens used, and estimated cost.
 
-When the decision is to stop:
-1. All active nodes are frozen after their current call completes.
-2. Remaining pending nodes are marked `skipped`.
-3. All completed/frozen node outputs are preserved.
-4. Escalate to human [P6.1b] with a summary of what completed, what was skipped, tokens used, and estimated cost.
+**Stage-aware continuation (preferred, not required):** If the implementation has visibility into which stage comes next, it is preferable to continue when only review/validation nodes remain (completing review on already-implemented work is high-value, low-cost) and to pause when planning or implementation nodes remain. This is an optimisation — the safe default is always to pause.
 
 **Relationship to P6 and P9:** The budget handling across policies applies at different thresholds in sequence:
 - [P9.6] fires first: the orchestrator pauses when **projected** spend will exceed the budget, giving the human a chance to increase it before exhaustion.
-- [P7.6] fires next: at 5% remaining, stage-aware evaluation determines whether to continue or stop.
-- [P6.1b] fires last: if stage-aware evaluation decides to stop, escalate to human for disposition.
+- [P7.6] fires next: at 5% remaining, pause and escalate.
+- [P6.1b] fires last: escalate to human for disposition (budget increase, resume, or close).
 
 ### P7.7 Every API call sets `max_tokens` to the model's maximum
 
@@ -87,7 +81,7 @@ When a DAG run is stopped due to budget exhaustion, a separate post-mortem proce
 - The orchestrator increasing the budget autonomously without human approval.
 - Interrupting or killing an active node mid-execution for any budget reason.
 - Setting `max_tokens` to anything less than the model's maximum.
-- Starting a new implementation or planning stage when the budget is within 5% of exhaustion [P7.6].
+- Discarding or skipping pending nodes at the 5% threshold instead of leaving them in `PENDING` for resumption [P7.6].
 - Not logging allocation or increase events as `BudgetEvent` records.
 
 ### Quick Reference
@@ -97,7 +91,7 @@ When a DAG run is stopped due to budget exhaustion, a separate post-mortem proce
 | Top-level budget | Set per complexity tier | May be increased via human approval only |
 | Composite node allocation | Parent subdivides | Local strategy per composite |
 | Active node interruption | Never | Always run to completion; freeze at node boundary [P7.4] |
-| Stage-aware stop threshold | 5% remaining | Continue for review; stop for planning/impl [P7.6] |
+| 5% threshold action | Pause run, leave pending nodes PENDING, escalate [P7.6] | Stage-aware continuation is preferred but optional |
 | `max_tokens` per request | Model maximum | Nodes always run to completion [P7.7] |
 | Budget event logging | All events including increases | Required for weight tuning [P7.8] |
 | Post-mortem | Beyond MVP | Design for it now [P7.9] |

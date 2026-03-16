@@ -199,11 +199,14 @@ class AncestorEntry(BaseModel):
     output: AgentOutput | str          # str when summarized; AgentOutput when passed through
 
 class NodeContext(BaseModel):
-    issue: IssueContext                # always verbatim [P5.3]
+    issue: IssueContext                # always verbatim [P5.3]; never capped or pruned
+    repo_metadata: RepoMetadata        # always verbatim [P5.3]; never capped or pruned;
+                                       # populated unconditionally on every dispatch regardless
+                                       # of budget state — not part of the 25% cap
     parent_outputs: dict[str, AgentOutput]   # key = node_id; all immediate DAG predecessors
     ancestor_context: AncestorContext  # grandparent+ after summarization rules
-    shared_context_view: SharedContextView   # capped at 25% of node budget [P5, P7]
-    context_budget_used: int           # tokens consumed by this context assembly
+    shared_context_view: SharedContextView   # capped at 25% of node USD budget [P5, P7]
+    context_bytes_used: int            # byte sum of DiscoveryRecords included in shared_context_view
 ```
 
 **`parent_outputs` population rules:**
@@ -234,7 +237,7 @@ class SharedContextView(BaseModel):
     negative_findings: list[DiscoveryRecord]
     summary: str
     active_plan: str
-    token_budget_used: int
+    usd_budget_used: float             # USD consumed by this SharedContextView snapshot
 ```
 
 ### RepoMetadata

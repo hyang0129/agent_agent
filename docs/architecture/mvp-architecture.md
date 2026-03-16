@@ -97,7 +97,8 @@ For MVP, the `CLAUDE.md` and policy set for any target repo are authored manuall
 | `MODEL` | haiku | sonnet | haiku |
 | `GIT_PUSH_ENABLED` | false | true | true (pushes to local bare repo) |
 | `DRY_RUN_GITHUB` | true | false | true |
-| `MAX_BUDGET_TOKENS` | 500,000 | 500,000 | 500,000 |
+| `MAX_BUDGET_USD` | 5.00 | 5.00 | 5.00 |
+| `WORKTREE_BASE_DIR` | `<repo>/../.agent_agent_worktrees` | `<repo>/../.agent_agent_worktrees` | `/workspaces/.agent_agent_tests/worktrees` |
 | `PORT` | 8100 | 8100 | 8100 |
 
 ---
@@ -362,12 +363,13 @@ With `MAX_WORKERS=1`, worktrees are created and torn down sequentially. The mech
 
 *Implements P07.*
 
-- Budget set at DAG run creation; never autonomously increased by the orchestrator
-- Top-down allocation: run budget → composite budget → node budget
-- `max_tokens` is always set to the model's maximum — nodes always run to completion
+- Budget set at DAG run creation in USD (`MAX_BUDGET_USD`); never autonomously increased by the orchestrator
+- All budget tracking is USD-denominated; `BudgetEvent` records `usd_before`/`usd_after`; `dag_runs.usd_used` is the running total; token counts are recorded in `ExecutionMeta` for observability only
+- Top-down allocation: run budget (USD) → composite budget → node budget
+- `max_tokens` is always set to the model's maximum — separate from the USD budget; nodes always run to completion
 - Active nodes are never interrupted; `frozen_at_budget` is applied at node boundaries only
-- SharedContextView cap (25% of node's budget allocation) is enforced at dispatch time
-- At 5% remaining: continue for review stages; stop and escalate for plan/implementation stages
+- `SharedContextView` cap: 25% of node's USD budget allocation, enforced at dispatch time
+- At 5% remaining: continue for Review composites; stop and escalate for Plan/Coding composites (stage-aware; flat halt in MVP, full stage-awareness in Phase 6)
 - All events logged as `BudgetEvent` records
 
 Budget increases require human approval via the escalation flow [P06].

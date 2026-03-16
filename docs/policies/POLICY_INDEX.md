@@ -33,7 +33,7 @@ All inter-node data MUST use these canonical Pydantic model names. Do not introd
 
 | Model | Used By | Description |
 |-------|---------|-------------|
-| `BudgetEvent` | Orchestrator | Allocation/freeze/increase event: `dag_run_id`, `node_id`, `event_type`, `tokens_before`, `tokens_after`, `reason`, `timestamp` |
+| `BudgetEvent` | Orchestrator | Allocation/freeze/increase event: `dag_run_id`, `node_id`, `event_type`, `usd_before`, `usd_after`, `reason`, `timestamp` |
 | `EscalationConfig` | Orchestrator | Channel config: `channel`, `webhook_url`, `github_mention`, `timeout_seconds`, `timeout_action`, `severity_filter` |
 
 ---
@@ -88,9 +88,9 @@ All nodes are on the critical path — every level converges into the terminal P
 
 ## [P07 — Budget Allocation](07-budget-allocation.md)
 
-Every DAG run has a token budget set at creation time. The budget may be increased via human-approved escalation [P6.4] or mid-execution budget pause [P9.5]; the orchestrator never increases it autonomously. Budget flows top-down: composite nodes receive a share and re-allocate to children. Active nodes are never interrupted — once a node starts, it runs to completion regardless of budget state; freezing happens at node boundaries only (`frozen_at_budget`). `max_tokens` is always set to the model's maximum. At 5% remaining, stage-aware evaluation: continue for review stages, stop for planning/implementation stages, then escalate [P6.1b]. All budget events (including increases) are logged.
+Every DAG run has a token budget set at creation time. The budget may be increased via human-approved escalation [P6.4] or mid-execution budget pause [P9.5]; the orchestrator never increases it autonomously. Budget flows top-down: composite nodes receive a share and re-allocate to children. Active nodes are never interrupted — once a node starts, it runs to completion regardless of budget state; freezing happens at node boundaries only (`frozen_at_budget`). `max_tokens` is always set to the model's maximum. At 5% remaining, the run is paused: pending nodes stay `PENDING` (not skipped), and the human is escalated for disposition. Stage-aware continuation (skipping the pause for cheap review stages) is preferred but not required. All budget events (including increases) are logged.
 
-**Violations include:** the orchestrator increasing the budget autonomously; interrupting an active node for budget reasons; setting `max_tokens` below the model maximum; starting an implementation or planning stage at 5% remaining budget; not logging budget events.
+**Violations include:** the orchestrator increasing the budget autonomously; interrupting an active node for budget reasons; setting `max_tokens` below the model maximum; marking pending nodes as `skipped` instead of `PENDING` at the 5% threshold; not logging budget events.
 
 *See also: [P05 — Context Management](#p05--context-management) — the `SharedContextView` is capped at 25% of the node's budget allocation.*
 

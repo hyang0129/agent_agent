@@ -15,7 +15,8 @@ Establish the package skeleton, config system, all Pydantic models, state store,
 ```
 src/agent_agent/
     __init__.py
-    config.py              # pydantic-settings; env profiles; all AGENT_AGENT_* settings
+    config.py              # pydantic-settings; env profiles; all AGENT_AGENT_* settings;
+                           # includes MAX_BUDGET_USD (float), WORKTREE_BASE_DIR (str)
     models/
         __init__.py
         agent.py           # PlanOutput, CodeOutput, TestOutput, ReviewOutput, AgentOutput
@@ -24,9 +25,13 @@ src/agent_agent/
         dag.py             # DAGRun, DAGNode, NodeResult, ExecutionMeta
         budget.py          # BudgetEvent, BudgetEventType
         escalation.py      # EscalationConfig, EscalationRecord
-    state.py               # SQLite schema + async CRUD (aiosqlite); all 6 tables
-    budget.py              # BudgetManager: top-down allocation, 25% SharedContextView cap,
-                           # 5% stage-aware threshold, event log
+    state.py               # SQLite schema + async CRUD (aiosqlite); all 6 tables;
+                           # dag_runs includes usd_used REAL DEFAULT 0.0 column;
+                           # async CRUD includes increment_usd_used(dag_run_id, amount: float)
+    budget.py              # BudgetManager: top-down allocation; all budget tracking is
+                           # USD-denominated; 25% SharedContextView cap (of node's USD budget),
+                           # 5% pause threshold (of total USD budget); BudgetEvent records
+                           # usd_before/usd_after; token counts tracked in ExecutionMeta only
 tests/
     __init__.py
     unit/
@@ -34,7 +39,7 @@ tests/
         test_config.py     # env profile loading, setting overrides
         test_models.py     # Pydantic validation, AgentOutput union, discovery field shapes
         test_state.py      # CRUD round-trips against :memory: SQLite
-        test_budget.py     # allocation, 5% threshold, event log
+        test_budget.py     # allocation, 5% USD threshold, event log (usd_before/usd_after)
 ```
 
 **Dependencies to add to pyproject.toml:** `pydantic-settings`, `aiosqlite`, `structlog`
@@ -45,7 +50,7 @@ tests/
 
 ## Phase 2 — DAG Engine + Worktree Manager (no agents)
 
-Build the orchestration spine. The DAG engine is the MVP stub (hardcoded single `(Coding, Review)` pair). The worktree manager handles creation and teardown for both composite types. The executor wires dispatch order, NodeContext assembly, and failure classification — but every agent slot is a stub that returns a hardcoded `AgentOutput`.
+Build the orchestration spine. The DAG engine is the MVP stub (hardcoded single `Coding → Review → Plan` triple per P1.2). The worktree manager handles creation and teardown for both composite types. The executor wires dispatch order, NodeContext assembly, and failure classification — but every agent slot is a stub that returns a hardcoded `AgentOutput`.
 
 **Deliverables**
 
@@ -53,35 +58,70 @@ Build the orchestration spine. The DAG engine is the MVP stub (hardcoded single 
 src/agent_agent/
     dag/
         __init__.py
-        engine.py          # DAGRun construction, topological traversal. MVP stub DAG shape:
-                           #   L0: NodeType.PLAN  (initial decomposition)
-                           #   L1: NodeType.CODING + NodeType.REVIEW (one pair)
-                           #   L2: NodeType.PLAN  (consolidation — same type, distinguished by level;
-                           #                       MVP stub always returns PlanOutput with no child_dag)
-                           # All nodes persisted to dag_nodes before any execution begins [P1.7]
+        engine.py          # DAGRun construction, topological traversal. MVP stub DAG shape
+                           # (per P1.2 — every level ends with a terminal Plan composite):
+                           #
+                           #   L0 DAG:  NodeType.PLAN  (initial decomposition — spawns L1 child DAG)
+                           #   L1 DAG:  NodeType.CODING  (one pair)
+                           #            NodeType.REVIEW  (depends on CODING)
+                           #            NodeType.PLAN    (terminal — stub always returns PlanOutput
+                           #                             with child_dag=null, signalling completion)
+                           #
+                           # The terminal Plan at L1 is not a separate level; it is the last node
+                           # in the L1 child DAG.
+                           # Child DAG spawn (Phase 4 real behaviour): when terminal Plan returns a
+                           # non-null child_dag, the executor constructs a new child DAGRun with
+                           # parent_dag_run_id set to the current run's id, persists all nodes to
+                           # dag_nodes before any execution begins [P1.8], then dispatches it
+                           # recursively with the same Coding→Review→Plan shape (max 4 levels).
+                           # Phase 2 stub: raise NotImplementedError if child_dag is non-null.
+                           # All nodes persisted to dag_nodes before any execution begins [P1.7/P1.8]
         executor.py        # dispatch loop, NodeContext assembly via ContextProvider,
                            # failure classification (P10.7), retry/backoff stubs;
+                           # WorktreeManager calls always via asyncio.to_thread() — never
+                           #   called bare; executor never awaits blocking subprocess directly;
                            # Review dispatch gate: check coding_node.branch_name is not None
                            #   (stub CodeOutput sets a fake branch name; real world sets it on push —
                            #   executor always checks the same state store field);
                            # after each node: calls budget_manager.drain_events() → flush to
                            #   StateStore + increment_usd_used(); then checks should_pause()
-                           #   → sets DAGRunStatus.PAUSED and stops all further dispatch
+                           #   → sets DAGRunStatus.PAUSED; all pending nodes remain PENDING
+                           #   (not SKIPPED); no further nodes are dispatched for this run;
+                           # child_dag recursion: if terminal Plan output has non-null child_dag
+                           #   → raise NotImplementedError (Phase 4 wires real recursive dispatch)
     context/
         __init__.py
-        provider.py        # ContextProvider: assembles NodeContext; parent_outputs from all
-                           # immediate DAG predecessors (keyed by node_id); AncestorContext
-                           # populated but empty for two-level MVP DAG (logic present for Phase 4);
-                           # SharedContextView cap: reads budget_manager.shared_context_cap(node_id)
-                           # (USD) and settings.usd_per_byte; if usd_per_byte == 0.0, cap is
-                           # unenforced (placeholder until profiled); otherwise applies Option B
-                           # truncation: sort all DiscoveryRecords newest-first, accumulate byte
-                           # sizes, drop records that exceed limit; sets context_budget_used to
-                           # byte sum of included records
+        provider.py        # ContextProvider: assembles NodeContext; fields:
+                           #   issue: sourced from DAGRun.issue_context (IssueContext); always
+                           #     included verbatim, never summarized or omitted [P5.3/P5.18];
+                           #     Phase 2 stub: IssueContext fields are empty strings — populated
+                           #     by the GitHub client in Phase 3;
+                           #   repo_metadata: sourced from SharedContext.repo_metadata; always
+                           #     included verbatim on every dispatch, never capped or pruned
+                           #     [P5.3]; Phase 2 stub: path and default_branch populated from
+                           #     DAGRun; claude_md is empty string until GitHub client (Phase 3)
+                           #     populates the target repo's CLAUDE.md content;
+                           #   parent_outputs: from all immediate DAG predecessors (keyed by
+                           #     node_id);
+                           #   ancestor_context: populated but empty for two-level MVP DAG
+                           #     (logic present for Phase 4);
+                           #   shared_context_view: cap reads budget_manager.shared_context_cap(
+                           #     node_id) (USD) and settings.usd_per_byte; if usd_per_byte == 0.0,
+                           #     cap is unenforced (placeholder until profiled); otherwise stub
+                           #     applies truncation-only (Tiers 2+3 masking/summarization deferred
+                           #     to Phase 6 per P5.8): sort DiscoveryRecords newest-first,
+                           #     accumulate byte sizes, drop records that exceed limit;
+                           #   context_bytes_used: byte sum of included DiscoveryRecords
         shared.py          # SharedContext write protocol: Pydantic type validation + append;
                            # conflict detection deferred to Phase 6 (MVP: last-write-wins + log warn)
     worktree.py            # WorktreeManager: git worktree add/remove for Coding and Review
                            # composites; naming: agent-<run-id>-code-<n> / review-<n>;
+                           # path: all worktrees created under settings.WORKTREE_BASE_DIR;
+                           #   dev/prod default: <repo_path>/../.agent_agent_worktrees/;
+                           #   test: /workspaces/.agent_agent_tests/worktrees/ (set by env);
+                           #   WorktreeManager raises if WORKTREE_BASE_DIR is not set;
+                           # async: all subprocess git calls wrapped in asyncio.to_thread()
+                           #   so the executor's async dispatch loop is never blocked;
                            # read-only for Review is enforced by tool selection in Phase 4,
                            # not filesystem permissions — WorktreeManager creates both identically;
                            # readonly=True flag stored on the worktree record for Phase 4 use
@@ -93,29 +133,48 @@ src/agent_agent/
                            # status from SQLite directly — emit_event is the log stream only
 tests/
     unit/
-        test_dag.py        # DAG construction, topological sort, node dependency resolution,
-                           # L0/L1/L2 level assignment, consolidation node is NodeType.PLAN
+        test_dag.py        # DAG construction, topological sort, node dependency resolution;
+                           # L0 DAG has one Plan node; L1 child DAG has Coding→Review→Plan shape;
+                           # terminal Plan node has NodeType.PLAN and no successors
         test_executor.py   # dispatch order, Review gate (branch_name None → not dispatched,
                            # branch_name set → dispatched); failure classification routing;
                            # pause-after-overrun: stub agent over-spends → DAG status = PAUSED,
-                           # no further nodes dispatched
-        test_context.py    # NodeContext assembly, parent_outputs keyed by node_id;
+                           #   pending nodes remain PENDING, no further nodes dispatched;
+                           # rerun cap [P10.9]: node fails twice → third invocation not attempted,
+                           #   node marked failed and escalation triggered;
+                           # no-retry failures [P10.9]: Safety Violation → escalated on first
+                           #   occurrence, no second invocation attempted;
+                           #   Resource Exhaustion → escalated immediately, no rerun;
+                           #   Deterministic → escalated immediately, no rerun;
+                           # transient retry [P10.7]: node raises transient error twice, succeeds
+                           #   on third attempt; assert retry count = 2, no rerun slot consumed,
+                           #   no escalation triggered, final status = COMPLETED
+        test_context.py    # NodeContext assembly: issue field always present (empty stub);
+                           # repo_metadata field always present and never pruned — assert
+                           #   present even when SharedContextView is fully truncated;
+                           # parent_outputs keyed by node_id;
                            # AncestorContext empty for two-level DAG;
-                           # cap unenforced when usd_per_byte=0; cap enforced (Option B drop)
-                           # when usd_per_byte set; context_budget_used equals byte sum of
+                           # cap unenforced when usd_per_byte=0; cap enforced (truncation stub)
+                           # when usd_per_byte set; context_bytes_used equals byte sum of
                            # included records
         test_observability.py  # emit_event writes structlog record with correct level, dag_run_id,
                                # node_id; L3 events include trace_id/span_id fields
     component/
         __init__.py
-        conftest.py        # tmp_git_repo(tmp_path): git init + initial commit fixture
+        conftest.py        # tmp_git_repo(tmp_path): git init + initial commit fixture;
+                           # sets AGENT_AGENT_WORKTREE_BASE_DIR = /workspaces/.agent_agent_tests/worktrees/
+                           #   via monkeypatch/env so all WorktreeManager calls land there,
+                           #   never inside the agent_agent git tree
         test_worktree.py   # real git ops: worktree create/teardown, branch isolation;
+                           # assert worktree paths are under WORKTREE_BASE_DIR;
                            # readonly flag stored correctly; uses tmp_git_repo fixture
 ```
 
-**Budget / StateStore wiring:** `BudgetManager` remains synchronous and in-memory. Add `drain_events() -> list[BudgetEvent]` to `BudgetManager` (returns and clears `self.events`). The executor is the sole flusher: after each node, calls `drain_events()`, awaits `state.append_budget_event()` for each, then `state.increment_usd_used()`. Pause check follows immediately after.
+**Budget / StateStore wiring:** `BudgetManager` remains synchronous and in-memory. All amounts are USD (`float`). Add `drain_events() -> list[BudgetEvent]` to `BudgetManager` (returns and clears `self.events`). The executor is the sole flusher: after each node, calls `drain_events()`, awaits `state.append_budget_event()` for each (recording `usd_before`/`usd_after`), then `state.increment_usd_used(dag_run_id, amount_usd)`. Pause check follows immediately after.
 
-**Pause rule:** `should_pause()` returns `True` when remaining DAG budget ≤ 5% of total. No stage-awareness — all pending nodes are skipped (`NodeStatus.SKIPPED`) when the DAG is paused. Post-MVP hardening can reintroduce Review exemptions.
+**P11 Source of Truth Rule:** SQLite is the authoritative source of truth for current state — it is what the server queries and what `agent-agent status` displays. The structured log stream (`emit_event`) is the authoritative audit trail — append-only, ordered, never mutated. Both must fire on every state transition. Failure semantics: a SQLite write failure is fatal (surface immediately and halt the operation); an `emit_event` failure is non-fatal (log to stderr and continue — it must never block execution). In case of conflict between the two, SQLite wins for "what the current state is"; the log stream is used for forensic investigation of how the divergence occurred.
+
+**Pause rule:** `should_pause()` returns `True` when remaining DAG budget ≤ 5% of total. When triggered, the executor sets `DAGRunStatus.PAUSED` and stops dispatching. Pending nodes are left in `NodeStatus.PENDING` — they are not skipped or cancelled. The DAG is frozen at a clean node boundary; the run can be resumed or inspected without loss of state.
 
 **SDK budget backstop (Phase 4 wiring):** `BudgetManager` owns all pause logic. The SDK's `max_budget_usd` is set to `total_budget_usd * 2` per invocation as a runaway-prevention backstop only — it is never expected to trigger under normal operation. The executor passes this value to `invoke_agent()` in Phase 4.
 
@@ -241,10 +300,11 @@ Fill in the stubs that are safe to skip until the happy path works.
 | Stub | Full implementation |
 |------|---------------------|
 | Escalation: log + halt | Structured escalation message with attempt history, DAG state, budget snapshot |
-| Context overflow: truncation only | Observation masking → Haiku summarization → truncation (P5.8, P5.12) |
+| Context overflow: truncation-only stub (Tiers 2+3 skipped) | Full P5.8 compaction: observation masking → Haiku summarization → truncation as last resort |
 | Budget split: equal | Weighted allocation; reclaim completed-node surplus to reserve; try_top_up |
 | Worktree cleanup: none | Startup scan: remove orphaned worktrees from prior crashed runs |
 | Conflict resolution: last-write-wins | Auto-resolve by confidence/recency; escalate on genuine conflict (P5.9) |
+| Pause: flat halt at 5% | Stage-aware: continue Review composites at 5% remaining, escalate only for Plan/Coding composites [P07] |
 
 **Gate:** Each hardening item has its own unit or component test. `pytest tests/` passes in full.
 
