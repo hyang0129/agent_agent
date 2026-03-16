@@ -76,6 +76,75 @@ The orchestrator is pointed at an issue. It produces a PR. The PR is evaluated a
 | Medium | "Implement per-node token budget tracking that halts execution when a node exceeds its allocation" | Touches executor, state store, and config. Tests understanding of the orchestration flow |
 | Complex | "Add support for conditional edges in the DAG — nodes that only execute if a predecessor's output meets a specified condition" | Core architecture change to the DAG engine. Tests deep comprehension of graph execution semantics |
 
+### 4. test-lox-compiler — Bytecode Compiler Construction (Rust)
+
+> **MVP Scope Note:** This test requires a **project-level orchestrator** — an agent that plans and coordinates work across multiple sequential issues toward a single construction goal. The MVP only implements issue-level agents (one issue → one DAG → one PR). The lox-compiler test is specified here for completeness and to inform the design of the project-level orchestrator, but it is **out of scope until that capability exists.**
+
+**Stack:** Rust (stable), no external crates beyond `clap` for the CLI — the compiler is self-contained. The official [Lox test suite](https://github.com/munificent/craftinginterpreters/tree/master/test) (250+ cases) is the acceptance oracle.
+
+**Domain complexity:** A complete bytecode compiler and virtual machine for the Lox language (Robert Nystrom's *Crafting Interpreters*, Part II). Scope: lexer, Pratt parser, single-pass bytecode emitter, stack-based VM, garbage collector, closures, classes, and inheritance. Final output: a `lox` binary that passes the official test suite.
+
+**Why this domain:**
+
+This test is structurally different from the other three. The other repos test the orchestrator's ability to resolve issues on **existing codebases**. This repo tests a harder problem: **greenfield construction under a budget cap** — building a non-trivial system from a blank slate, across a sequence of dependent issues, where the agent must manage its own architecture as the codebase grows.
+
+- **No existing code to anchor on** — the orchestrator cannot rely on existing patterns, must design data structures (chunk format, value representation, hash table) before implementing
+- **Sequential issue dependency** — each issue builds on the previous; the planner/executor must respect topological order and cannot parallelize across issues
+- **Objective pass/fail criterion** — the Lox test suite is deterministic and public; scoring is unambiguous unlike the other repos where quality judgments are partly subjective
+- **Budget pressure is first-class** — the repo exists specifically to test whether the orchestrator can complete a fixed-scope construction task within a $50 API budget; budget tracking and allocation decisions are part of what's being evaluated
+
+**Issue series (fixed sequence, not independent):**
+
+| # | Issue | Builds On | Tests What |
+|---|---|---|---|
+| 1 | Implement lexer: all Lox token types, error recovery for unterminated strings/invalid chars | — | Baseline: can agents implement from spec without examples? |
+| 2 | Implement chunk (bytecode container) and disassembler | #1 | Foundation data structures; disassembler is used in all subsequent debugging |
+| 3 | Implement the VM: execute `OP_CONSTANT`, `OP_NEGATE`, arithmetic ops, `OP_RETURN` | #2 | Minimal end-to-end pipeline (compile literal → execute) |
+| 4 | Implement the Pratt parser and single-pass compiler for expressions and statements | #3 | Core architecture decision — agents must implement the precedence table correctly |
+| 5 | Add local variables, scopes, and the resolver | #4 | State tracking across compilation; tests agent understanding of the symbol table |
+| 6 | Add control flow: `if`, `while`, `for`, jump patching | #5 | Backpatching and forward jumps — a known difficulty spike |
+| 7 | Add functions, call frames, and the call stack | #6 | Major VM restructuring; tests whether agents can refactor without regressions |
+| 8 | Add closures and upvalues | #7 | The hardest single feature — upvalue capture semantics. Tests deep comprehension |
+| 9 | Add garbage collection (mark-and-sweep) | #8 | Requires understanding every heap allocation site across the whole codebase |
+| 10 | Add classes, instances, methods, and `this` | #9 | OOP layer on top of existing VM — tests agent ability to extend without breaking |
+| 11 | Add inheritance and `super` | #10 | Final feature; pass rate on official test suite is the terminal acceptance criterion |
+
+**Budget and timing constraints:**
+
+This test has explicit hard limits that are part of the acceptance definition:
+
+```python
+class CompilerBuildTest(BaseModel):
+    repo: str = "test-lox-compiler"
+    model: str = "claude-sonnet-4-6"          # Sonnet, not Opus — budget constraint
+    total_budget_usd: float = 50.0             # Hard stop; orchestrator must not exceed
+    per_issue_budget_usd: float = 6.0          # Soft limit per issue; planner may re-allocate
+    total_timeout_hours: float = 4.0           # Wall-clock limit for the full build
+    target_test_pass_rate: float = 0.90        # Pass 90%+ of official Lox test suite
+```
+
+If the orchestrator exhausts its budget before issue #11, it must prioritize: issues #1–8 cover ~75% of the test suite. A partial build that passes 75%+ of tests within budget scores higher than a failed attempt to complete all 11 issues.
+
+**Scoring:**
+
+| Dimension | Metric | Weight |
+|---|---|---|
+| Test suite pass rate | % of 250+ official Lox tests passing | 50% |
+| Budget efficiency | `(tests_passing / usd_spent)` — tests per dollar | 20% |
+| Issues completed | Fraction of 11 issues resolved | 15% |
+| Code quality | Ruff-equivalent lint pass; idiomatic Rust (clippy) | 15% |
+
+**Why Lox specifically (vs. other candidates):**
+
+| Candidate | Pro | Con |
+|---|---|---|
+| **Lox (clox in Rust)** ✓ | Authoritative spec, public test suite, reference impl for comparison | Requires Rust expertise in agents |
+| Monkey (Ball's books) | Python-friendly, good pedagogical structure | Test suite is informal, scoring is harder |
+| MiniC → LLVM IR | More realistic compiler target | LLVM runtime dependency; test oracle unclear |
+| Scheme R5RS subset | Academically interesting | Spec ambiguity; tail-call semantics hard to auto-verify |
+
+---
+
 ## Evaluation Criteria
 
 Each test issue is evaluated on multiple dimensions:
@@ -187,18 +256,19 @@ Automated scoring handles correctness (test results) and completeness (file cove
 
 ## Test Matrix
 
-The full test matrix runs all tiers across all repos:
+The full test matrix runs all tiers across all repos, plus the compiler build:
 
 ```
-          simple    medium    complex
-webstore    ✓         ✓         ✓
-mailservice ✓         ✓         ✓
-agent-agent ✓         ✓         ✓
+               simple    medium    complex
+webstore         ✓         ✓         ✓
+mailservice      ✓         ✓         ✓
+agent-agent      ✓         ✓         ✓
+lox-compiler     —         —    full build (issues #1–11) [requires project-level agent, post-MVP]
 ```
 
-**9 test cases total.** Each run of the full matrix provides a comprehensive snapshot of orchestrator capability.
+**9 issue-resolution test cases** cover the MVP. The compiler build is additive once a project-level orchestrator exists.
 
-For development iteration, run only the simple tier (~3 minutes, ~$1.50 in API cost). The full matrix is for milestone validation (~30 minutes, ~$15).
+For development iteration, run only the simple tier (~3 minutes, ~$1.50 in API cost). The full matrix is for milestone validation (~30 minutes, ~$15). The compiler build is a separate run with a $50 hard budget cap.
 
 ## Regression Tracking
 
@@ -228,6 +298,8 @@ This enables tracking orchestrator quality over time: "Did the latest planner ch
 
 ### 1. Test Repos Are Real, Not Mocks
 The test repositories are fully functional applications with real tests, real linting, and real CI. They are not toy examples. The issues are written as a real user would write them — sometimes vague, sometimes overly detailed, sometimes missing context. This is intentional.
+
+The compiler repo is the exception: it starts empty and the issues are precisely specified (the language spec is authoritative). The intentional challenge there is architectural — the orchestrator must design a coherent system across 11 dependent issues without an existing codebase to anchor on.
 
 ### 2. Known Solutions Are Hidden
 The known-correct solutions are stored outside the test repos (in agent_agent's test fixtures). The orchestrator has no access to them during execution. Solutions are only used for post-hoc evaluation, not as hints.

@@ -4,9 +4,9 @@ Context management operates at three simultaneous layers: typed Pydantic objects
 
 ---
 
-### 1. Three Layers of Context
+### P5.1 Three layers of context
 
-Context management operates at three layers. All three are active simultaneously:
+Context management operates at three layers simultaneously:
 
 | Layer | What It Does | Mechanism |
 |---|---|---|
@@ -16,7 +16,7 @@ Context management operates at three layers. All three are active simultaneously
 
 The context assembly layer is authoritative. When edge context rules and shared context rules produce a payload that exceeds the node's budget, the context assembly layer decides what to include, summarize, mask, or omit.
 
-### 2. Typed Context Objects at Every Edge
+### P5.2 Typed context objects at every edge
 
 Every DAG edge carries a typed Pydantic model, not free text. Agent output and execution metadata are strictly separated:
 
@@ -26,23 +26,23 @@ class NodeResult(BaseModel):
     meta: ExecutionMeta          # Orchestrator sees this — never passed downstream
 ```
 
-### 3. The Original Issue Anchors Every Node
+### P5.3 The original issue anchors every node
 
-Every agent receives the original GitHub issue text as a top-level field in its input context, regardless of how deep in the DAG or how many nesting levels removed. This field is immutable and identical across all nodes in a run. It is never summarized, truncated, or omitted.
+Every agent receives the original GitHub issue text as a top-level field in its input context, regardless of nesting depth. This field is immutable and identical across all nodes in a run. It is never summarized, truncated, or omitted.
 
-### 4. Context Flows Forward Only
+### P5.4 Context flows forward only
 
 Downstream agents never send data, corrections, or signals to upstream agents. If a downstream agent discovers a problem with the upstream plan:
 
 1. The agent marks its own result as `failed` with a structured error describing the issue.
 2. The orchestrator receives the failure.
-3. The orchestrator decides: retry the failed node with enriched context, invalidate the upstream subtree and re-plan, or escalate to human.
+3. The orchestrator decides: retry the failed node with enriched context, or escalate to a human [P6].
 
-### 5. Immutable Context Snapshots
+### P5.5 Immutable context snapshots
 
 Once a node completes, its output context is frozen. No subsequent node, retry, or orchestrator action modifies a completed node's stored output. If a node must be re-executed, a new node instance is created with a new attempt number.
 
-### 6. Structured Failure Signals
+### P5.6 Structured failure signals
 
 When a downstream agent determines that upstream output is incorrect or insufficient, it expresses this as a structured field in its own (failed) result:
 
@@ -56,7 +56,7 @@ class UpstreamIssue(BaseModel):
 
 ---
 
-### 7. Shared Context: What Accumulates Across the DAG
+### P5.7 Shared context: what accumulates across the DAG
 
 Shared context is a typed Pydantic model accumulating discoveries across all agents in a DAG run, independent of edge topology.
 
@@ -73,7 +73,7 @@ Shared context is a typed Pydantic model accumulating discoveries across all age
 
 **Not discoveries**: raw tool output, agent reasoning traces, execution metadata, or already-known information.
 
-#### Shared Context Structure
+#### Shared context structure
 
 ```python
 class SharedContext(BaseModel):
@@ -88,17 +88,17 @@ class SharedContext(BaseModel):
     active_plan: str                  # Derived
 ```
 
-#### Write Protocol
+#### Write protocol
 
 Agents do not write to shared context directly. Each agent's typed output includes a `discoveries` field. The **orchestrator** is the sole writer: it validates, conflict-checks, and appends discoveries after each node completes.
 
-#### Read Protocol
+#### Read protocol
 
 Agents receive a **view** of shared context, not the full object. The view is read-only and is a snapshot at dispatch time.
 
 ---
 
-### 8. Context Size Management
+### P5.8 Context size management
 
 **Tier 1: Structured compaction (always active).** Discoveries stored as structured fields, not prose.
 
@@ -118,26 +118,26 @@ Agents receive a **view** of shared context, not the full object. The view is re
 3. Redundant file mappings.
 4. Full entries from grandparent+ nodes (replace with summary).
 
-### 9. Conflict Resolution
+### P5.9 Conflict resolution
 
 When a new discovery contradicts an existing entry in shared context:
 
 | Tier | Condition | Action |
 |---|---|---|
-| Auto-resolve: higher confidence | Confidence scores differ by >= 0.3 | Accept higher-confidence entry; archive the lower one |
+| Auto-resolve: higher confidence | Confidence scores differ by ≥0.3 | Accept higher-confidence entry; archive the lower one |
 | Auto-resolve: more recent evidence | One references code state after the other's changes | Accept the post-change entry |
 | Merge: complementary | Entries address different aspects of same subject | Keep both, tagged `complementary` |
-| Escalate: genuine conflict | Similar confidence, same evidence base, incompatible conclusions | Create `ConflictRecord`, dispatch resolution agent or escalate to human |
+| Escalate: genuine conflict | Similar confidence, same evidence base, incompatible conclusions | Create `ConflictRecord`, dispatch resolution agent or escalate to human [P6] |
 
 Unresolved conflicts are surfaced to downstream agents explicitly.
 
-### 10. Provenance and Auditability
+### P5.10 Provenance and auditability
 
 Every entry in shared context carries: `source_node`, `timestamp`, `confidence` (0.0–1.0), and `superseded_by`. The orchestrator never deletes entries from stored shared context — pruning and masking happen only at the view level.
 
 ---
 
-### 11. Context Assembly: The ContextProvider
+### P5.11 Context assembly: the ContextProvider
 
 All context assembly is mediated through a `ContextProvider` protocol. The orchestrator's executor never directly constructs agent input context — it delegates to the provider.
 
@@ -150,30 +150,30 @@ class NodeContext(BaseModel):
     context_budget_used: int
 ```
 
-### 12. Two-Phase Strategy: Summarization Now, Retrieval Later
+### P5.12 Two-phase strategy: summarization now, retrieval later
 
 **Phase 1 (MVP): Consumer-driven summarization.**
-- Depth ≤ 3 from current node: pass parent output in full, no summarization.
-- Depth > 3: LLM summarization step using downstream agent's system prompt and input schema as the negotiation protocol.
+- Depth ≤3 from current node: pass parent output in full, no summarization.
+- Depth >3: LLM summarization step using downstream agent's system prompt and input schema as the negotiation protocol.
 - Merge points (parallel branches converging): always summarize regardless of depth.
 - Summarization calls use the cheapest model (Haiku-tier).
 
-**Phase 2 (Future): RAG-based retrieval.** Replaces depth > 3 summarization with vector-store retrieval. Swapped in by replacing the `ContextProvider` implementation, not by refactoring the executor.
+**Phase 2 (Future): RAG-based retrieval.** Replaces depth >3 summarization with vector-store retrieval. Swapped in by replacing the `ContextProvider` implementation, not by refactoring the executor.
 
-### 13. When to Summarize vs. When to Pass Through
+### P5.13 When to summarize vs. when to pass through
 
-1. **Immediate parent edge, depth ≤ 3:** Pass through. No summarization.
-2. **Immediate parent edge, depth > 3:** Pass parent in full. Summarize grandparent+ outputs.
+1. **Immediate parent edge, depth ≤3:** Pass through. No summarization.
+2. **Immediate parent edge, depth >3:** Pass parent in full. Summarize grandparent+ outputs.
 3. **Merge point (2+ incoming edges):** Always summarize.
 4. **Context budget exceeded at any depth:** Mask first, then summarize, then truncate.
 
-### 14. Summarization Budget
+### P5.14 Summarization budget
 
 - Each summarization call's token cost is charged against the DAG's total token budget.
 - Summarization cost is capped at 10% of the DAG's total budget.
 - Log a warning when summarization costs exceed 5% of the DAG budget.
 
-### 15. Summary Regeneration Protocol
+### P5.15 Summary regeneration protocol
 
 The `summary` field on `SharedContext` is regenerated at two trigger points:
 1. After any node completion that adds 3+ discoveries.
@@ -183,17 +183,17 @@ The summary is a derived artifact — never a source of truth.
 
 ---
 
-### 16. Context Within Composite Nodes
+### P5.16 Context within composite nodes
 
-The same context rules apply inside composite nodes as between outer DAG nodes. Within the Coding Node's cycle, earlier cycles are summarized for later cycles, emphasizing what was tried and why it failed.
+The same context rules apply inside composite nodes as between outer DAG nodes. Within the Coding composite's internal cycle, earlier cycles are summarized for later cycles, emphasizing what was tried and why it failed.
 
-### 17. Context Across Nesting Levels
+### P5.17 Context across nesting levels
 
 Shared context accumulates across the entire run, not per nesting level. The `ContextProvider` assembles context for each node regardless of which nesting level it occupies, using the same depth thresholds and summarization rules.
 
 ---
 
-### 18. Invariants
+### P5.18 Invariants
 
 1. **The original issue is always included verbatim.** Never summarized, truncated, or omitted.
 2. **Immediate parent outputs are always included in full.** Summarization only applies to grandparent+ ancestors and merge-point integration.
@@ -202,3 +202,25 @@ Shared context accumulates across the entire run, not per nesting level. The `Co
 5. **Context management never modifies upstream outputs.** Summarization and retrieval produce new derived artifacts.
 6. **The orchestrator is the sole writer to shared context.**
 7. **Forward-only flow is absolute.** No agent, sub-agent, or orchestrator action sends information backwards along an edge.
+
+---
+
+### Violations
+
+- Passing free text between agents instead of typed Pydantic models.
+- A downstream agent attempting to signal or modify an upstream node's output.
+- Omitting the original issue from any agent's context.
+- An agent writing directly to shared context (bypassing the orchestrator write protocol).
+- Passing the full output of every ancestor node without applying the summarization rules [P5.12, P5.13].
+- Deleting (rather than masking) entries from the stored shared context.
+
+### Quick Reference
+
+| Parameter | Value | Notes |
+|-----------|-------|-------|
+| Shared context cap | 25% of node's context budget | Per node, at view assembly |
+| Pass-through depth | ≤3 from current node | Grandparent+ outputs are summarized |
+| Merge point summarization | Always | Regardless of depth |
+| Summarization budget cap | 10% of total DAG budget | Warning at 5% |
+| Summary regeneration triggers | 3+ new discoveries; view would exceed budget | Derived artifact only |
+| Evidence masking | Non-parent nodes | `evidence: "[masked]"` |

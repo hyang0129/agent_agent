@@ -1,82 +1,111 @@
 # Policy 01: DAG as Orchestration Model
 
-Every GitHub issue resolution is modeled as an immutable, recursively nested Directed Acyclic Graph (DAG). DAGs are never mutated during execution — adaptation happens by nesting a new child DAG inside an orchestrate node, not by modifying a running DAG. The standard spine at every level is `research → plan → orchestrate`, where the orchestrate node either signals completion (returns `null`) or spawns a child DAG for the next level of work. This model provides termination guarantees, deadlock freedom, bounded cost, and crash recovery at every nesting level while supporting dynamic adaptation through recursion.
+The Plan composite node is the orchestration primitive at every level of the hierarchy. Every issue resolution runs as a recursively nested DAG: a Plan composite node at level 0 analyzes the issue and spawns a child DAG; each inner level runs one or more Coding composites followed by a Review composite and a terminal Plan composite that either signals completion (`null`) or spawns the next level. DAGs are immutable once persisted — adaptation happens by nesting a new child DAG inside the terminal Plan composite, never by modifying an executing DAG. Parallelism is horizontal (independent Coding composites within a level run concurrently); cross-level nesting is strictly sequential. Nesting is hard-capped at 4 levels. Every node output is a typed Pydantic model, every DAG is persisted before execution begins, and every Coding composite node pushes all changes to its remote branch on exit for crash recoverability.
 
 ---
 
-### 1. Every issue resolution MUST be modeled as an immutable, recursively nested DAG
+### P1.1 Every issue resolution MUST be modeled as an immutable, recursively nested DAG
 
-When the orchestrator receives a GitHub issue, it begins execution with a top-level DAG. DAGs are immutable once persisted — no nodes are added, removed, or re-executed, and no edges are modified. Adaptation to runtime discoveries is achieved through **nesting**: an orchestrate node may spawn a child DAG as its internal execution, following the Temporal Child Workflow model. The parent DAG sees only the orchestrate node's typed inputs and outputs; the child DAG's structure is opaque to the parent.
+When the orchestrator receives a GitHub issue, it begins execution with a top-level Plan composite node. DAGs are immutable once persisted — no nodes are added, removed, or re-executed, and no edges are modified after persistence. Adaptation to runtime discoveries is achieved through **nesting**: the terminal Plan composite at each level either returns `null` (completion) or spawns a child DAG as its output. The parent DAG sees only the terminal Plan composite's typed inputs and outputs; the child DAG's internal structure is opaque to the parent.
 
 Each level of the hierarchy is an independent, immutable, acyclic graph. Iteration and replanning are expressed as recursion through nesting, not as structural cycles or mutations to an executing DAG.
 
-### 2. The standard node sequence is: research → plan → orchestrate
+### P1.2 The standard structure is: Plan composite at L0; Coding → Review → Plan composite at L1+
 
-Every DAG level follows the same spine:
+**Level 0** consists of a single Plan composite node. It analyzes the issue and either resolves it directly or spawns the first child DAG.
 
-```
-research → plan → orchestrate
-```
-
-The **orchestrate** node is the decision point. It examines the plan and either:
-- Returns `null` (the work is complete, no child DAG needed), or
-- Spawns a child DAG to execute the plan.
-
-A typical issue resolution produces a recursion like:
+**Level 1 and beyond** follow the structure:
 
 ```
-L0: research → plan → orchestrate
-                          └─ L1: code → test → review → research → plan → orchestrate
-                                                                              └─ L2: code → test → review → research → plan → orchestrate
-                                                                                                                                └─ L3: git → PRReview → research → plan → orchestrate
-                                                                                                                                                                            └─ null (done)
+Coding composite(s) → [Integration node] → Review composite → Plan composite
 ```
 
-At each level after L0, the sequence begins with the work phase (code/test/review or git/PRReview) followed by the research → plan → orchestrate spine. The research and plan nodes at each level are **preloaded**: they are always present in the DAG structure but execute as stubs (pass-through with minimal output) if the preceding review/test passes. If the review/test fails, they activate fully.
+The terminal **Plan composite** is the sole decision point at each level. It either:
+- Returns `null` — work is complete, no child DAG needed.
+- Spawns a child DAG — work continues at the next nesting level.
 
-### 3. DAGs MUST be acyclic at every nesting level
-
-No DAG at any level of the hierarchy may contain cycles. The acyclic constraint provides termination guarantees, deadlock freedom, and predictable cost bounds within each level. What would traditionally be modeled as a cycle (test fails → fix → re-test) is instead expressed as recursion: the orchestrate node spawns a new child DAG that includes a new code → test → review sequence. Each child DAG is independently acyclic.
-
-### 4. Parallelism is horizontal within a level, never vertical across levels
-
-The orchestrator dispatches all nodes whose upstream dependencies are satisfied concurrently, up to the configured concurrency limit. This parallelism is strictly **intra-level**: independent branches within a single DAG run concurrently. The concurrency limit is configurable per environment.
-
-**Cross-level parallelism does not exist.** Because all branches within a DAG must converge into a single orchestrate node, and only that orchestrate node can spawn the next nesting level, recursion is strictly sequential. Level N+1 cannot begin until level N's orchestrate node executes.
-
-### 5. The planner MUST declare explicit edges for every data dependency
-
-No implicit dependencies. If node B needs output from node A, there must be a directed edge from A to B in the DAG definition. The orchestrator validates the DAG at construction time: every node's declared input types must be satisfiable by the output types of its upstream nodes. This applies at each nesting level independently.
-
-### 6. Every branch MUST terminate in an orchestrate node
-
-When a plan produces parallel branches, every branch must converge into a single orchestrate node as its terminal node. No branch may terminate in a non-orchestrate node. The orchestrate node is the only node authorized to make the completion decision (return `null` or spawn a child DAG).
+A typical issue resolution:
 
 ```
-plan → orchestrate
-           ├─ code(module_a) → test(module_a) → review(module_a) ─┐
-           └─ code(module_b) → test(module_b) → review(module_b) ─┤
-                                                                   └─ research → plan → orchestrate
+L0: [Plan composite]
+      └─ L1: Coding composite → Review composite → [Plan composite]
+                                                          └─ L2: Coding composite → Review composite → [Plan composite]
+                                                                                                              └─ null (done)
 ```
 
-### 7. Every node MUST produce a typed, structured output
+When a level's work requires parallel coding branches:
 
-Agent outputs are Pydantic models, not free text. The output schema is determined by the agent type (ResearchOutput, CodeOutput, TestOutput, ReviewOutput, PlanOutput, OrchestrateOutput). Downstream nodes receive typed inputs derived from upstream outputs. The orchestrate node's output is either `null` (signaling completion) or a reference to the child DAG it spawned.
+```
+[Plan composite — parent level]
+  └─ child DAG:
+       ├─ Coding composite (module_a) ─────┐
+       ├─ Coding composite (module_b) ─────┤
+       └───────────────────────────────────→ [Integration] → Review composite → [Plan composite]
+```
 
-### 8. Every DAG at every nesting level MUST be persisted before execution begins
+### P1.3 DAGs MUST be acyclic at every nesting level
 
-The full DAG definition (nodes, edges, agent types, parent DAG reference, nesting depth) is written to the state store before the first node is dispatched. Each DAG record includes a reference to its parent orchestrate node (null for the top-level DAG). On restart, the orchestrator reconstructs the DAG tree from the state store and resumes from the last completed node. No in-memory-only DAG state.
+No DAG at any level may contain cycles. The acyclic constraint provides termination guarantees, deadlock freedom, and predictable cost bounds. What would traditionally be a cycle (test fails → fix → re-test) is expressed as recursion: the terminal Plan composite spawns a child DAG containing new Coding and Review composites. Each child DAG is independently acyclic.
 
-### 9. Topological order MUST be the sole determinant of execution order within a DAG level
+The Coding composite's internal cyclic sub-agent loop (Programmer → Test Designer → Test Executor → Debugger) is an implementation detail internal to that composite and is modeled as an unrolled acyclic DAG with persisted sub-agent outputs [P10.4].
+
+### P1.4 Parallelism is horizontal within a level, never vertical across levels
+
+The orchestrator dispatches all nodes whose upstream dependencies are satisfied concurrently, up to the configured concurrency limit. This parallelism is strictly **intra-level**: independent Coding composites within a single child DAG run concurrently.
+
+**Cross-level parallelism does not exist.** All branches within a level must converge into the terminal Plan composite before the next level can begin. Level N+1 cannot start until level N's Plan composite has executed.
+
+### P1.5 The planner MUST declare explicit edges for every data dependency
+
+No implicit dependencies. If node B needs output from node A, there must be a directed edge from A to B in the DAG definition. The orchestrator validates the DAG at construction time: every node's declared input types must be satisfiable by the output types of its upstream nodes. This validation applies at each nesting level independently.
+
+### P1.6 Every parallel branch MUST converge into the terminal Plan composite
+
+When a child DAG contains parallel Coding composites, every branch must converge through the optional Integration node and the Review composite into the single terminal Plan composite. No branch may terminate at any other node.
+
+### P1.7 Every node MUST produce a typed, structured output
+
+Agent outputs are Pydantic models, not free text. See the Model Reference in [POLICY_INDEX.md](POLICY_INDEX.md) for canonical model names. The terminal Plan composite's output is either `null` (signaling completion) or a reference to the child DAG it spawned.
+
+### P1.8 Every DAG at every nesting level MUST be persisted before execution begins
+
+The full DAG definition — nodes, edges, agent types, parent DAG reference, nesting depth — is written to the state store before the first node is dispatched. Each DAG record includes a reference to its parent Plan composite node (`null` for the top-level DAG). On restart, the orchestrator reconstructs the DAG tree from the state store and resumes from the last completed node. No in-memory-only DAG state.
+
+### P1.9 Topological order MUST be the sole determinant of execution order within a level
 
 The orchestrator traverses each DAG level in topological order. No priority hints, no manual ordering overrides, no agent-type-based scheduling preferences. If two nodes are both ready (all upstream dependencies met), both are dispatched concurrently.
 
-### 10. Recursion depth is estimated, not hard-capped
+### P1.10 Maximum nesting depth is 4 levels (hard cap)
 
-The orchestrator maintains a **recursion estimate** (default: 10) representing the expected maximum nesting depth for a given issue. This estimate is passed as context to research and plan nodes at every level, along with the current depth. The estimate is advisory, not a hard ceiling. Budget constraints (which are hard limits) naturally bound recursion depth.
+The orchestrator enforces a maximum nesting depth of **4 levels** (L0 through L3). The current depth is passed as context to every Plan composite node. If a Plan composite at depth 4 determines that more work is needed, it MUST escalate to a human [P6.1] rather than spawning a fifth level.
 
-### 11. Git state MUST be preserved after code changes, before testing
+Issues requiring more than 4 levels of decomposition should be split into separate issues before execution begins.
 
-When a code node completes, the working tree state is preserved in a recoverable form before the test node executes. The preservation mechanism may be a git commit, stash, or patch file. The code node records the git state reference as part of its output, and downstream nodes receive it as context.
+### P1.11 Coding composite nodes MUST push all changes to remote on exit
 
-Test and review nodes never modify the working tree — they only read and evaluate it. If a child DAG at level N+1 fails catastrophically, the orchestrator can restore the working tree to the state locked in by level N's code node.
+When a Coding composite node exits — whether on success, failure, or resource exhaustion — it pushes all in-progress file changes to its designated remote branch before returning control to the orchestrator. This ensures all work-in-progress is recoverable from the remote in the event of an orchestrator crash or restart. Git operations within Coding composite nodes are otherwise unrestricted; specific permission boundaries will be defined post-MVP.
+
+---
+
+### Violations
+
+- Mutating an executing DAG (adding, removing, or re-executing nodes) instead of spawning a child DAG.
+- Allowing a parallel branch to terminate at any node other than the terminal Plan composite.
+- A terminal Plan composite spawning more than one child DAG.
+- Executing any node before its containing DAG definition is persisted to the state store.
+- A Coding composite node exiting without pushing all in-progress changes to its remote branch.
+- A Plan composite at depth 4 spawning a child DAG instead of escalating to a human.
+- Any cross-level parallelism — a child DAG beginning before its parent level's Plan composite has executed.
+
+### Quick Reference
+
+| Constraint | Value | Enforcement |
+|-----------|-------|-------------|
+| L0 structure | Single Plan composite node | Orchestrator validates |
+| L1+ structure | Coding composite(s) → [Integration] → Review composite → Plan composite | Planner output validation |
+| Max nesting depth | 4 levels (L0–L3) | Hard cap, orchestrator enforced |
+| Intra-level parallelism | Allowed (concurrent Coding composites) | Configurable concurrency limit |
+| Cross-level parallelism | Prohibited | Structural — convergence required before next level |
+| DAG mutation during execution | Prohibited | State store is append-only after plan persisted |
+| Git push on Coding composite exit | Required (all in-progress changes) | Orchestrator post-node hook |
+| Node output format | Typed Pydantic model (see Model Reference) | Schema validation at dispatch |

@@ -4,11 +4,11 @@ Human involvement is anchored to exactly two planned checkpoints: an issue appro
 
 ---
 
-### 1. Two planned checkpoints, structured mid-execution pauses when necessary
+### P9.1 Two planned checkpoints, structured mid-execution pauses when necessary
 
-Human involvement is anchored to two planned checkpoints (issue approval and PR review). Between them, execution is autonomous by default — but the orchestrator MAY pause for budget overruns or approval requests when a genuine conflict arises. These pauses are not free-form; they follow the structured formats in sections 5 and 6.
+Human involvement is anchored to two planned checkpoints (issue approval and PR review). Between them, execution is autonomous by default — but the orchestrator MAY pause for budget overruns or genuine policy conflicts. These pauses are not free-form; they follow the structured formats in [P9.5] and [P9.6].
 
-### 2. Checkpoint 1: Issue approved for DAG
+### P9.2 Checkpoint 1: Issue approved for DAG
 
 Before DAG planning begins, a dedicated investigation agent analyzes the issue and presents its understanding to the human. The investigation agent does NOT plan implementation. It answers:
 
@@ -19,11 +19,11 @@ Before DAG planning begins, a dedicated investigation agent analyzes the issue a
 
 The human either approves (triggering DAG planning and execution) or provides further clarification.
 
-### 3. Checkpoint 2: PR ready for review
+### P9.3 Checkpoint 2: PR ready for review
 
 Standard GitHub PR review. The human reads the diff and either approves (merge) or rejects (triggers improvement loop).
 
-### 4. Workflow improvement loop on PR rejection
+### P9.4 Workflow improvement loop on PR rejection
 
 A rejected PR triggers a structured root-cause conversation:
 
@@ -33,7 +33,7 @@ A rejected PR triggers a structured root-cause conversation:
 
 The output is a concrete change (typically to CLAUDE.md or agent prompt templates) that prevents recurrence. The loop closes when the human confirms the adaptation is sufficient.
 
-### 5. Mid-execution approval requests
+### P9.5 Mid-execution approval requests
 
 The orchestrator MAY pause for human approval when it encounters a genuine conflict that cannot be resolved from existing policies. Each approval request MUST present a structured justification:
 
@@ -45,21 +45,43 @@ The orchestrator MAY pause for human approval when it encounters a genuine confl
 
 The human's response MUST include a policy or instruction change — not just "do option A."
 
-### 6. Mid-execution budget pauses
+### P9.6 Mid-execution budget pauses
 
 The orchestrator MUST pause when projected token spend will exceed the budget set for the current run. The budget pause presents:
 
 1. **Current spend** — Tokens and estimated cost consumed so far.
 2. **Projected remaining cost** — What the remaining DAG nodes are estimated to require.
 3. **Why the overrun?** — What caused spend to exceed the original estimate.
-4. **Options** — At minimum: increase budget, increase to a capped amount, abort the run, or reduce scope.
+4. **Options** — At minimum: increase budget [P7.1], increase to a capped amount, abort the run, or reduce scope.
 5. **Suggested budget adjustment** — If this class of issue is likely to recur, propose a change to default budget estimates.
 
-### 7. Pause discipline
+Note: this pause fires on **projected** overrun, before the budget is actually exhausted. The stage-aware evaluation [P7.6] and escalation [P6.1b] apply if execution continues and the budget reaches the 5% threshold.
+
+### P9.7 Pause discipline
 
 Mid-execution pauses are pressure-release valves, not supervision checkpoints. The bar for pausing is high:
 
 - **Do not pause for decisions the policies already cover.** If the answer is in the policies, follow it.
 - **Do not pause for routine uncertainty.** Agents should make reasonable judgment calls and move forward.
 - **Every pause must produce a durable fix** — a policy change, budget adjustment, or scope clarification that prevents the same pause from recurring.
-- **If a run accumulates more than 2 approval pauses**, treat it as a signal that the investigation at checkpoint 1 was insufficient. After completing the run, trigger the improvement loop (section 4) focused on investigation quality.
+- **If a run accumulates more than 2 approval pauses**, treat it as a signal that the investigation at checkpoint 1 was insufficient. After completing the run, trigger the improvement loop [P9.4] focused on investigation quality.
+
+---
+
+### Violations
+
+- Pausing mid-execution for a decision that existing policies already cover.
+- Pausing for "routine uncertainty" without a clear policy gap.
+- Producing a one-off answer from a mid-execution pause without updating policy.
+- Allowing a run to accumulate more than 2 approval pauses without triggering the improvement loop [P9.4].
+- Skipping the issue approval checkpoint (Checkpoint 1) before DAG planning begins.
+
+### Quick Reference
+
+| Checkpoint | When | Blocks execution? |
+|-----------|------|------------------|
+| Issue approval [P9.2] | Before DAG planning | Yes — DAG planning does not start until approved |
+| PR review [P9.3] | After execution completes | N/A — run is finished |
+| Mid-execution approval [P9.5] | Genuine policy conflict only | Yes — DAG paused |
+| Budget pause [P9.6] | Projected overrun | Yes — DAG paused until human responds |
+| PR rejection loop [P9.4] | After PR rejected | N/A — produces policy change |

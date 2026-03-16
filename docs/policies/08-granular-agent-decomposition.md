@@ -1,46 +1,70 @@
 # Policy 08: Granular Agent Decomposition
 
-Every agent must do exactly one kind of work. The most critical decomposition is between agents that produce changes (write files, generate code) and agents that persist changes (git commit, push, create PRs) — these must never be the same agent. Permissions are enforced at the tool layer, not the prompt layer: each agent type receives only the tools it needs via the API, and the executor validates every tool call against the agent's permission profile before execution. Each coding composite node receives its own isolated git worktree, so file mutations from one node cannot interfere with other concurrent nodes.
+Every agent must do exactly one kind of work. The Code agent handles file writes and git operations within its isolated Coding composite worktree; PR creation is an orchestrator operation, not an agent operation — no agent is authorized to create or merge PRs. Permissions are enforced at the tool layer, not the prompt layer: each agent type receives only the tools it needs via the API, and the executor validates every tool call — including arguments — against the agent's permission profile before execution. Each Coding composite node receives its own isolated git worktree, so file mutations from one node cannot interfere with other concurrent nodes.
 
 ---
 
-### 1. Every agent should do exactly one kind of work
+### P8.1 Every agent should do exactly one kind of work
 
-If an agent can both produce changes and persist them, it has too much power. Decompose broad agent roles into narrow, single-responsibility agents. This improves:
+If an agent has responsibilities that span fundamentally different capability areas, decompose it. This improves:
 
 - **Safety** — destructive operations are isolated to dedicated agents with minimal scope.
 - **Logging** — every log entry maps to a clear, auditable action.
 - **Retry and rollback** — if a narrow agent fails, its impact is contained.
 - **Review surface** — a human reviewing agent actions can reason about a single-purpose agent far more easily than a multi-purpose one.
 
-### 2. Separate mutation from persistence
+### P8.2 Separate code production from PR creation
 
-The most critical decomposition is between agents that **produce changes** (write files, generate code) and agents that **persist changes** (git commit, git push, create PRs). These MUST never be the same agent.
+The Code agent handles file writes and git operations (commits, pushes) within its Coding composite's isolated worktree. PR creation is an orchestrator operation triggered after all coding and review completes — it is not delegated to any agent. No agent is authorized to create or merge PRs.
 
-An agent that can both write arbitrary files and run `git push` has an unacceptably large blast radius. A hallucination in a coding step can be immediately and irreversibly published. Separating these concerns introduces a mandatory validation boundary.
+This separation ensures that no hallucination or error in a coding step can produce an irreversible, publicly-visible artifact without passing through the Review composite and the orchestrator's PR creation gate.
 
-### 3. The coding composite node receives its own working tree
+Specific per-operation git permission boundaries within Coding composite nodes will be defined post-MVP [P3.2].
 
-The orchestrator creates a temporary git worktree for each coding composite node. The coding agents operate exclusively within this isolated worktree, so their file mutations never touch the primary checkout or interfere with other concurrent coding nodes. When the node completes, the orchestrator merges or discards the worktree as appropriate.
+### P8.3 The Coding composite node receives its own isolated working tree
 
-### 4. New agent type decomposition checklist
+The orchestrator creates a temporary git worktree for each Coding composite node. Agents operating within that node work exclusively in this isolated worktree — their file mutations never touch the primary checkout or interfere with other concurrent Coding composite nodes. When the node exits, it pushes all changes to its remote branch [P1.11], and the orchestrator merges or discards the worktree as appropriate.
+
+### P8.4 New agent type decomposition checklist
 
 When defining a new agent type, apply these checks:
 
-1. **Does this agent both produce output and persist it?** Split it.
-2. **Does this agent have access to both read and write tools for the same resource?** Consider whether the read and write sides can be separate agents.
-3. **Does this agent have access to any destructive operation?** That operation should be the agent's *only* job, so it can be audited and gated independently.
+1. **Does this agent both produce code output and create PRs?** Separate them.
+2. **Does this agent have access to both read and write tools for the same resource?** Consider whether read and write sides can be separate agents.
+3. **Does this agent have access to any destructive operation?** That operation should be the agent's *only* job so it can be audited and gated independently.
 4. **Can this agent's failure cause state that is hard to roll back?** Isolate the irreversible action into its own agent with the narrowest possible scope.
 
 If a proposed agent type fails any of these checks, decompose it further before implementation.
 
-### 5. Enforce permissions at the tool layer, not the prompt layer
+### P8.5 Enforce permissions at the tool layer, not the prompt layer
 
 - Only pass allowed tools to the Claude API call.
 - Wrap tool execution in a permission checker that validates against the agent's permission profile.
 - Validate tool **arguments**, not just tool names — a permitted tool with dangerous arguments is still dangerous.
-- If an agent returns a tool call it shouldn't have, the executor rejects it.
+- If an agent returns a tool call it shouldn't have, the executor rejects it and classifies it as a Safety Violation [P10.7].
 
-### 6. Audit all tool calls
+### P8.6 Audit all tool calls
 
 Every tool call, regardless of whether it is allowed, MUST be logged with: agent type, agent ID, tool name, allowed/denied status, denial reason (if denied), and timestamp. Denied actions are especially important to log — they indicate either a misconfigured agent or a prompt injection attempt.
+
+---
+
+### Violations
+
+- Any agent that can both write source files and create or merge PRs.
+- Coding agents that write to the primary git checkout instead of their isolated worktree.
+- Enforcing permissions only in system prompts without tool-layer validation.
+- Omitting argument validation for dangerous tools [P8.5].
+- Not logging denied tool calls [P8.6].
+- An agent creating a PR directly (PR creation is an orchestrator operation only).
+
+### Quick Reference
+
+| Concern | Owner | Notes |
+|---------|-------|-------|
+| File writes | Code agent (in worktree) | Isolated per Coding composite |
+| Git commit/push | Code agent (in worktree) | Pushes to remote on node exit [P1.11] |
+| PR creation | Orchestrator only | Not delegated to any agent |
+| PR merge | Human only | Agents never merge |
+| Permission enforcement | Tool layer + argument validation | Prompt-layer guidance alone is insufficient |
+| Tool call audit | All calls, allowed and denied | Denied calls flagged as potential misconfig or injection |
