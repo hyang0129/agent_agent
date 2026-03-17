@@ -1,12 +1,34 @@
 # Phase 4 Planning — Agent Team Specification
 
-*This document defines the agent team used to produce a concrete, reviewable Phase 4 implementation plan. It is a process document, not a deliverable — remove before committing the final plan.*
+*Process document — remove before committing the final plan.*
 
 ---
 
 ## Goal
 
-Produce a Phase 4 implementation plan concrete enough that a coding agent can execute it with ≤5% ambiguity — meaning 95% of decisions are made upfront, and the remaining 5% are explicitly flagged as deferred-to-implementation decisions with clear fallback behavior.
+Produce a Phase 4 implementation plan concrete enough that a coding agent can execute it with ≤5% ambiguity. The remaining 5% are explicitly flagged with clear fallback behavior.
+
+---
+
+## Resolved Decisions
+
+These were resolved during the planning session and are inputs to the plan, not open questions.
+
+| Decision | Resolution |
+|----------|-----------|
+| SDK package | `claude-agent-sdk`: `query(prompt, options)` → `AsyncIterator[Message]`, collect `ResultMessage` at end |
+| Config class | `ClaudeAgentOptions`: `system_prompt`, `allowed_tools`/`disallowed_tools`, `model`, `max_budget_usd`, `max_turns`, `cwd`, `permission_mode`, `can_use_tool` callback, `thinking` config, `output_format` |
+| Cost tracking | `ResultMessage.total_cost_usd` returned by SDK |
+| Tool validation | `can_use_tool` async callback for per-call argument validation [P8.5] |
+| Extended thinking | `thinking` config + `effort` field for Plan composite [P10.11] |
+| Structured output | Use SDK's `output_format` parameter with JSON schema matching each `AgentOutput` model |
+| Tool names | Intent-level per P3.4/P8.5 — map SDK tool names to capability intents (read/write/execute), not literal strings |
+| Composite internal model | Composites are DAG containers; sub-agents are real nodes in a composite-scoped internal DAG using the same infrastructure (tables, executor) as the outer DAG |
+| Coding composite cycles | Sequential cycles of linear DAGs (iterative nested DAG per P1.8/P10.4); each cycle is a 4-node acyclic DAG persisted on demand |
+| Sub-agent git ops | Programmer/Debugger handle own staging/committing for resumability [P10.13]; push-on-exit is composite-level |
+| Child DAG recursion | Full 4-level support (not stubbed) |
+| Component test strategy | Real SDK calls, marked `@pytest.mark.sdk`; hard budget cap $1/test; after measuring actual usage, set cap at max(2× actual, $0.10) |
+| System prompts | Do not include all policies; add a Phase 6 step to estimate what policy context to provide and to define the policy reviewer agent |
 
 ---
 
@@ -14,56 +36,60 @@ Produce a Phase 4 implementation plan concrete enough that a coding agent can ex
 
 ### Agent 1 — Plan Author
 
-**Role:** Take the existing Phase 4 section of `implementation-plan.md` and expand it into a step-by-step implementation plan with:
-- Exact file paths, class names, method signatures
-- SDK integration details (import paths, API surface, configuration)
-- System prompt skeletons for each sub-agent type
-- Tool selection per sub-agent (exact tool names + argument validation rules)
-- NodeContext serialization format for SDK user turns
-- Error mapping (SDK exceptions → failure taxonomy)
-- The Coding composite's internal cycle state machine
-- Child DAG spawn wiring in the executor
-- Component test design (what each test asserts, fixture requirements)
+Expands the existing Phase 4 section of `implementation-plan.md` into a step-by-step implementation plan covering:
 
-**Inputs:** All architecture docs, policy index, data models, existing executor/worktree/context code, Claude Code Agent SDK documentation.
+- Exact file paths, class names, method signatures
+- SDK integration (imports, `ClaudeAgentOptions` configuration per sub-agent type)
+- System prompt skeletons for each sub-agent type
+- Tool selection per sub-agent (SDK tool names mapped from P3.3 capability intents)
+- `can_use_tool` argument validation rules per sub-agent type
+- NodeContext serialization format for SDK user turns
+- Error mapping (SDK exceptions → P10.7 failure taxonomy)
+- Internal DAG model: `DAGRun.composite_node_id`, per-cycle persistence, executor recursion
+- Child DAG spawn wiring (replacing the `NotImplementedError` in executor)
+- Component test design (assertions, fixtures, $1 budget caps)
 
 **Constraints:**
-- Must not contradict any active policy (P01–P11)
-- Must not introduce new abstractions beyond what the architecture defines
-- Must specify what is deferred vs. what is implemented now
-- Must be ordered: 4a → 4b → 4c → 4d → 4e (each builds on the previous)
+- Must not contradict policies P01–P11 (as updated this session)
+- Must not introduce abstractions beyond what the architecture defines
+- Must specify what is deferred to Phase 6 vs. implemented now
+- Ordered: 4a → 4b → 4c → 4d → 4e (each builds on the previous)
 
 ### Agent 2 — Technical Reviewer
 
-**Role:** Review the Plan Author's output for:
-- **Internal consistency** — do the pieces fit together? Does the SDK wrapper match what the composites need? Do the test assertions match the implementation?
-- **Deviation from best practices** — Claude Code SDK usage patterns, async patterns, Pydantic v2 patterns, pytest patterns
-- **Reasonable deferrals** — are things being deferred that should be done now? Are things being done now that should wait for Phase 6?
-- **Missing error paths** — what happens when the SDK returns unexpected output? When a sub-agent produces invalid Pydantic output? When git push fails?
-- **Test coverage gaps** — are there behaviors specified in the plan that have no corresponding test?
+Reviews the Plan Author's output for:
 
-**Output:** Annotated plan with issues classified as:
-- `[FIX]` — incorrect or inconsistent; must be fixed before the plan is final
-- `[RISK]` — technically correct but likely to cause problems in implementation
-- `[DEFER-OK]` — reasonable deferral, no action needed
-- `[DEFER-BAD]` — deferral that will cause rework; should be addressed now
+- **Internal consistency** — SDK wrapper ↔ composite needs, test assertions ↔ implementation
+- **Best practice deviation** — SDK usage patterns, async patterns, Pydantic v2, pytest
+- **Deferral assessment** — things deferred that should be done now, or done now that belong in Phase 6
+- **Missing error paths** — unexpected SDK output, invalid Pydantic output, git push failure
+- **Test coverage gaps** — behaviors specified without corresponding tests
+
+**Issue classifications:**
+- `[FIX]` — incorrect or inconsistent; must fix
+- `[RISK]` — correct but likely to cause problems
+- `[DEFER-OK]` — reasonable deferral
+- `[DEFER-BAD]` — deferral that will cause rework
 
 ### Agent 3 — Policy Compliance Reviewer
 
-**Role:** Check every decision in the plan against the policy index (P01–P11) and architectural invariants. Specifically:
-- Tool permissions match P03/P08 tables exactly
-- Budget handling matches P07 (USD-denominated, never autonomous increase, 5% threshold)
-- Context flow matches P05 (forward-only, issue always verbatim, 25% cap)
-- Failure classification matches P10 (exact categories, retry/rerun limits)
-- Observability matches P11 (emit_event on every state transition, structured JSON)
-- No sub-agent creates/merges PRs (P03/P08)
-- Worktree isolation enforced (P08)
-- Push-on-exit for Coding composites (P01.11)
+Checks every decision against policies P01–P11 and architectural invariants:
 
-**Output:** Policy compliance report with:
-- `[VIOLATION]` — plan contradicts a policy; must be fixed
-- `[AMBIGUOUS]` — plan doesn't clearly satisfy a policy; needs clarification
-- `[COMPLIANT]` — explicitly verified
+- Tool permissions match P3.3 capability intents
+- Budget handling matches P07 (USD-denominated, no autonomous increase, 5% threshold)
+- Context flow matches P05 (forward-only, issue always verbatim, 25% cap)
+- Failure classification matches P10.7 (exact categories, retry/rerun limits)
+- Internal DAG model satisfies P10.2/P10.4/P10.5 (composite as DAG container, resumption)
+- Iterative nested DAG persistence satisfies P1.8 (per-cycle)
+- Sub-agent git ops match P10.13 (own commits, composite-level push)
+- No sub-agent creates/merges PRs (P3.3/P8.2)
+- Worktree isolation enforced at tool layer (P8.3/P8.5)
+- Observability: `emit_event` on every state transition, structured JSON (P11)
+
+**Issue classifications:**
+- `[VIOLATION]` — contradicts a policy; must fix
+- `[AMBIGUOUS]` — doesn't clearly satisfy a policy; needs clarification
+- `[COMPLIANT]` — verified
 
 ---
 
@@ -73,66 +99,45 @@ Produce a Phase 4 implementation plan concrete enough that a coding agent can ex
 Agent 1 (Plan Author)
     │
     ▼
-┌──────────────────────────┐
-│  Draft Phase 4 Plan      │
-└──────────────────────────┘
+Draft Phase 4 Plan
     │
-    ├──────────────────────────┐
-    ▼                          ▼
-Agent 2 (Technical Review)  Agent 3 (Policy Review)
-    │                          │
-    ▼                          ▼
-┌──────────────┐       ┌──────────────┐
-│ Issue Report  │       │ Compliance   │
-│ [FIX/RISK/   │       │ Report       │
-│  DEFER]      │       │ [VIOLATION/  │
-└──────────────┘       │  AMBIGUOUS]  │
-    │                  └──────────────┘
-    │                          │
-    └──────────┬───────────────┘
-               ▼
-        Agent 1 (Revision Pass)
-               │
-               ▼
-    ┌─────────────────────┐
-    │  Fork Decision       │
-    │                      │
-    │  For each issue:     │
-    │  - Can fix without   │
-    │    human? → fix it   │
-    │  - Needs human       │
-    │    judgment?          │
-    │    Fork 1: PAUSE     │
-    │    Fork 2: BEST GUESS│
-    └─────────────────────┘
-               │
-        ┌──────┴──────┐
-        ▼             ▼
-   Fork 1          Fork 2
-   (conservative)  (autonomous)
+    ├───────────────────────┐
+    ▼                       ▼
+Agent 2 (Technical)    Agent 3 (Policy)
+    │                       │
+    ▼                       ▼
+Issue Report            Compliance Report
+[FIX/RISK/DEFER]        [VIOLATION/AMBIGUOUS]
+    │                       │
+    └───────┬───────────────┘
+            ▼
+     Agent 1 (Revision)
+            │
+            ▼
+     Single Plan with inline markers:
+       - [FIX] and [VIOLATION] → resolved
+       - [RISK] fixable without human → resolved
+       - [RISK] needing judgment → ⏸️ marker + 🤖 auto-decision
+       - [AMBIGUOUS] → ⏸️ marker + 🤖 auto-decision
 ```
 
 ---
 
-## Fork Definitions
+## Output Structure
 
-### Fork 1 — Conservative (Human-in-the-Loop)
+One plan, not two forks. Each unresolved point has both markers inline:
 
-- All `[FIX]` and `[VIOLATION]` issues are resolved in-plan
-- All `[RISK]` issues that can be resolved without human judgment are resolved
-- `[RISK]` issues requiring human judgment → marked `⏸️ HUMAN GUIDANCE NEEDED` inline, with the specific question and options listed
-- `[AMBIGUOUS]` policy interpretations → marked `⏸️ HUMAN GUIDANCE NEEDED`
-- All questions are also collected into `phase-4-human-questions.md` for convenience
+```markdown
+### Some decision point
 
-**Intended use:** Human checks `phase-4-human-questions.md` periodically, answers questions, and the plan is updated.
+⏸️ **HUMAN GUIDANCE NEEDED:** Should X be Y or Z?
+- Option A: ...
+- Option B: ...
 
-### Fork 2 — Autonomous (Best-Guess)
+🤖 **AUTO-DECISION:** Option A — rationale here. Proceeding with this unless overridden.
+```
 
-- All `[FIX]` and `[VIOLATION]` issues are resolved identically to Fork 1
-- `[RISK]` issues → resolved with a best-guess decision, marked `🤖 AUTO-DECIDED: <rationale>`
-- `[AMBIGUOUS]` policy interpretations → resolved by choosing the interpretation most consistent with the policy's stated intent, marked `🤖 AUTO-DECIDED: <rationale>`
-
-**Intended use:** Ready for immediate coding execution. Human reviews auto-decisions after the fact.
+The human can review `phase-4-human-questions.md` (a flat list of all ⏸️ points) and override any auto-decision. If no override, the 🤖 decision stands.
 
 ---
 
@@ -140,7 +145,6 @@ Agent 2 (Technical Review)  Agent 3 (Policy Review)
 
 | File | Purpose | Remove before commit? |
 |------|---------|----------------------|
-| `phase-4-plan-fork1.md` | Conservative implementation plan | No (becomes the final plan after questions answered) |
-| `phase-4-plan-fork2.md` | Autonomous implementation plan | Yes (reference only; merge decisions into Fork 1) |
-| `phase-4-human-questions.md` | Collected questions from Fork 1 | Yes |
-| `phase-4-planning-spec.md` | This file (process doc) | Yes |
+| `phase-4-plan.md` | The implementation plan (single document) | No — becomes the final plan |
+| `phase-4-human-questions.md` | Flat list of all ⏸️ points for async human review | Yes |
+| `phase-4-planning-spec.md` | This file | Yes |
