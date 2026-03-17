@@ -41,22 +41,31 @@ Hitting an iteration cap is Resource Exhaustion — the node fails and its outpu
 
 ### P10.4 Composite nodes define collaboration as DAGs
 
-The internal structure of a composite node is a DAG — acyclic or cyclic. Collaboration between sub-agents is expressed through edges, not through free-form conversation.
+The internal structure of a composite node is a DAG. Collaboration between sub-agents is expressed through edges, not through free-form conversation. Each sub-agent invocation is a node with persisted inputs and outputs.
 
-**Coding composite (cyclic):**
+**Coding composite — sequential cycles of linear DAGs:**
+
+The Coding composite runs up to `max_cycles` (default 3) cycles. Each cycle is a 4-node acyclic DAG:
+
 ```
-Cycle 1..N:  Programmer → Test Designer → Test Executor → Debugger
-Exit: tests pass OR cycle cap reached OR budget exhausted
+Cycle N:  Programmer → Test Designer → Test Executor → Debugger
 ```
 
-**A cyclic composite node is just an unrolled DAG.** The Coding composite with `max_cycles: 3` is structurally equivalent to a 12-node DAG (4 agents × 3 cycles). Each sub-agent invocation is a node with persisted inputs and outputs. The exit condition (tests pass) is evaluated after Test Executor in each unrolled cycle.
+Cycle continuation is evaluated by the composite after each cycle completes:
+- Tests pass → done (composite returns success)
+- Tests fail and cycles remain → persist and execute the next cycle's DAG
+- Cycle cap reached or budget exhausted → exit with failure and full history
+
+Each cycle's DAG is persisted before that cycle's first node executes [P1.8]. Cycles are created on demand — only the current cycle's nodes exist in the state store until the next cycle is needed.
+
+> **Relationship to nested DAGs:** This framing is an acceptable implementation of nested DAG semantics — the composite's cycle loop produces the same outcomes as a model where the Debugger node spawns child DAGs (analogous to the Plan composite). The sequential-cycle framing is preferred because the cycle decision is a mechanical check (did tests pass?), not a planning decision, and does not warrant node-level spawning machinery. Implementations that use either framing are policy-compliant provided they satisfy P10.5 (resumption) and P1.3 (acyclic at every nesting level).
 
 ### P10.5 Composite node resumption
 
 Because a composite node's internal structure is a DAG with persisted node outputs:
 
 - **On sub-agent failure:** The failed sub-agent is re-invoked with its original inputs plus failure context. Other completed sub-agents are not re-executed.
-- **On crash recovery:** The composite node's internal DAG is reconstructed from the state store. Completed sub-agents are loaded from persistence. Execution resumes from the first incomplete sub-agent.
+- **On crash recovery:** The composite node's internal DAG is reconstructed from the state store. Completed sub-agents are loaded from persistence. Execution resumes from the first incomplete sub-agent within the current cycle.
 - **On cycle-cap exhaustion (Coding composite):** The composite node exits with failure. Its output includes the full history of completed sub-agent outputs across all cycles.
 
 ### P10.6 Re-invocation is for nodes, not composite nodes
@@ -134,9 +143,17 @@ The re-invocation prompt MUST contain:
 3. **Attempt number:** "This is attempt 2 of 2."
 4. **Prior output (when relevant):** For Agent Error failures, include the relevant portion of prior output.
 
-### P10.13 Idempotency on re-invocation
+### P10.13 Git operations within Coding composites
 
-Each Coding composite executes in its own git worktree [P8.3], providing filesystem-level isolation. Sub-agents inside composite nodes share the same worktree across cycles — the Programmer's changes in cycle 1 must be visible to the Test Executor and Debugger. Git operations (including the push-on-exit [P1.11]) are handled by the Coding composite node as a whole — sub-agents inside the composite never push directly.
+*This sub-policy applies only to Coding composites — the only composite type whose sub-agents perform git operations.*
+
+Each Coding composite executes in its own git worktree [P8.3], providing filesystem-level isolation. All sub-agent nodes within the composite's internal DAG share this worktree — the Programmer's changes in cycle 1 are visible to the Test Executor and Debugger in the same cycle, and to all sub-agents in subsequent cycles.
+
+**Sub-agent git operations:** Programmer and Debugger sub-agent nodes handle their own git operations (staging, committing) within the shared worktree. This is required for resumability [P10.5] — if the composite crashes between sub-agents, the worktree's git history reflects all completed sub-agents' work, and execution resumes from the first incomplete sub-agent without loss.
+
+**Push-on-exit is a composite-level concern:** The push to remote [P1.11] is performed by the Coding composite after its internal DAG completes (success or failure), not by individual sub-agent nodes. No sub-agent pushes directly.
+
+**Worktree scope:** Sub-agents within a Coding composite are restricted to the composite's worktree. They must not reference the primary checkout, other composites' worktrees, or paths outside the worktree root. This is enforced at the tool layer [P8.5], not by filesystem permissions.
 
 ### P10.14 Metrics
 

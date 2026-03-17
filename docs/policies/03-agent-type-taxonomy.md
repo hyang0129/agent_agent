@@ -1,6 +1,6 @@
 # Policy 03: Agent Type Taxonomy
 
-Agent_agent uses three composite types — Plan, Coding, and Review. Each composite contains one or more named sub-agents. Sub-agents within a composite are not exposed to the DAG as separate nodes; they are internal to the composite's implementation. Permissions are enforced at the tool layer, not only in system prompts. New composite types require passing a four-point decomposition checklist before they may be added.
+Agent_agent uses three composite types — Plan, Coding, and Review. Each composite contains one or more named sub-agents. Sub-agents within a composite are not exposed to the **outer** DAG as separate nodes; the outer DAG sees only the composite's typed input/output. Internally, sub-agents execute as nodes within a composite-scoped DAG (an iterative nested DAG for Coding composites [P1.8, P10.4], or a single-iteration internal DAG for Plan and Review composites). Permissions are enforced at the tool layer, not only in system prompts. New composite types require passing a four-point decomposition checklist before they may be added.
 
 ---
 
@@ -19,7 +19,7 @@ These three composites cover the full lifecycle of issue resolution: understand 
 | **Coding composite** | Debugger | Diagnoses test failures and writes corrective changes. |
 | **Review composite** | Reviewer | Evaluates code quality, correctness, test coverage, and policy compliance across all Coding composite outputs. |
 
-Sub-agents are not interchangeable across composites. The Programmer cannot be invoked from the Review composite; the Reviewer cannot be invoked from the Coding composite.
+Sub-agents are not interchangeable across composites. The Programmer cannot be invoked from the Review composite; the Reviewer cannot be invoked from the Coding composite. Sub-agents are nodes within their composite's internal DAG [P10.2, P10.4] but are opaque to the outer DAG — the Plan composite reasons about "Coding composite A," not about individual sub-agent invocations within it.
 
 ### P3.3 Each sub-agent type has a single, well-defined responsibility
 
@@ -34,7 +34,9 @@ Sub-agents are not interchangeable across composites. The Programmer cannot be i
 
 ### P3.4 Sub-agent permissions are enforced at the tool layer
 
-System prompts describe each sub-agent's role, but enforcement happens at the tool layer. Each sub-agent receives only the tools it needs via the Anthropic API's `tools` parameter. The orchestrator's executor validates every tool call against the sub-agent's permission profile before execution. A sub-agent that attempts a disallowed tool call is rejected by the executor, not just discouraged by its prompt. Arguments are also validated — a permitted tool with dangerous arguments is still rejected [P8.5].
+System prompts describe each sub-agent's role, but enforcement happens at the tool layer. Each sub-agent receives only the tools it needs via the SDK's tool configuration. The orchestrator's executor validates every tool call against the sub-agent's permission profile before execution. A sub-agent that attempts a disallowed tool call is rejected by the executor, not just discouraged by its prompt. Arguments are also validated — a permitted tool with dangerous arguments is still rejected [P8.5].
+
+**Tool names are intent-level.** The permission matrix in P3.3 defines capabilities (read files, write files, run tests, git operations) rather than literal tool name strings. The implementation maps these capability intents to the specific tool names provided by the SDK (e.g., "Read", "Edit", "Bash"). Compliance is evaluated against the permission intent — read-only agents cannot write, worktree-scoped agents cannot escape — not against exact tool name matches.
 
 ### P3.5 No agent handles architecture, debug, refactor, or deploy as a standalone composite
 

@@ -38,10 +38,12 @@ If a proposed agent type fails any of these checks, decompose it further before 
 
 ### P8.5 Enforce permissions at the tool layer, not the prompt layer
 
-- Only pass allowed tools to the Claude API call.
+- Only pass allowed tools to the SDK agent invocation.
 - Wrap tool execution in a permission checker that validates against the agent's permission profile.
 - Validate tool **arguments**, not just tool names — a permitted tool with dangerous arguments is still dangerous.
 - If an agent returns a tool call it shouldn't have, the executor rejects it and classifies it as a Safety Violation [P10.7].
+
+Tool names in the permission matrices (P3.3) describe capability intents, not literal SDK tool names. The implementation maps intents to SDK-specific tool names and validates compliance against the intent (e.g., "no file writes" means no tool that can modify files, regardless of what that tool is named in the SDK).
 
 ### P8.6 Audit all tool calls
 

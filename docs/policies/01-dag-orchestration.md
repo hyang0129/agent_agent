@@ -47,7 +47,7 @@ When a level's work requires parallel coding branches:
 
 No DAG at any level may contain cycles. The acyclic constraint provides termination guarantees, deadlock freedom, and predictable cost bounds. What would traditionally be a cycle (test fails → fix → re-test) is expressed as recursion: the terminal Plan composite spawns a child DAG containing new Coding and Review composites. Each child DAG is independently acyclic.
 
-The Coding composite's internal cyclic sub-agent loop (Programmer → Test Designer → Test Executor → Debugger) is an implementation detail internal to that composite and is modeled as an unrolled acyclic DAG with persisted sub-agent outputs [P10.4].
+The Coding composite's internal sub-agent loop (Programmer → Test Designer → Test Executor → Debugger) is an iterative nested DAG [P1.8, P10.4]: each iteration is an independent acyclic DAG, and cycle continuation is a composite-level decision evaluated after each iteration completes.
 
 ### P1.4 Parallelism is horizontal within a level, never vertical across levels
 
@@ -71,6 +71,8 @@ Agent outputs are Pydantic models, not free text. See the Model Reference in [PO
 
 The full DAG definition — nodes, edges, agent types, parent DAG reference, nesting depth — is written to the state store before the first node is dispatched. Each DAG record includes a reference to its parent Plan composite node (`null` for the top-level DAG). On restart, the orchestrator reconstructs the DAG tree from the state store and resumes from the last completed node. No in-memory-only DAG state.
 
+**Iterative nested DAGs:** An iterative nested DAG is a special case of the recursive nested DAG where (a) the nesting decision is a binary predicate rather than a planning decision, and (b) each child DAG has the same structure as its parent. The Coding composite's internal cycle (Programmer → Test Designer → Test Executor → Debugger, up to 3 iterations) is the primary example. Because the iteration count is runtime-determined, each iteration's DAG is persisted before that iteration's first node executes — the composite does not pre-persist all possible iterations. This satisfies the persistence requirement: every DAG that will execute is persisted before it begins.
+
 ### P1.9 Topological order MUST be the sole determinant of execution order within a level
 
 The orchestrator traverses each DAG level in topological order. No priority hints, no manual ordering overrides, no agent-type-based scheduling preferences. If two nodes are both ready (all upstream dependencies met), both are dispatched concurrently.
@@ -80,6 +82,8 @@ The orchestrator traverses each DAG level in topological order. No priority hint
 The orchestrator enforces a maximum nesting depth of **4 levels** (L0 through L3). The current depth is passed as context to every Plan composite node. If a Plan composite at depth 4 determines that more work is needed, it MUST escalate to a human [P6.1] rather than spawning a fifth level.
 
 Issues requiring more than 4 levels of decomposition should be split into separate issues before execution begins.
+
+**Internal DAGs do not increment the nesting level.** The 4-level cap applies to outer DAG nesting (Plan composite → child DAG). Composite-internal DAGs — including iterative nested DAGs (e.g., Coding composite cycles) and single-iteration internal DAGs (e.g., Plan and Review composites' sub-agent invocations) — operate within a level, not across levels. A Coding composite at L2 that runs 3 internal cycles is still at L2; its cycles do not count toward the 4-level cap.
 
 ### P1.11 Coding composite nodes MUST push all changes to remote on exit
 
