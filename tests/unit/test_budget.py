@@ -1,4 +1,5 @@
 """Tests for BudgetManager.  [P7]"""
+
 from __future__ import annotations
 
 import pytest
@@ -16,6 +17,7 @@ def _mgr(total: float = 5.0, nodes: list[str] | None = None) -> BudgetManager:
 # ---------------------------------------------------------------------------
 # Allocation
 # ---------------------------------------------------------------------------
+
 
 class TestAllocation:
     def test_equal_split(self):
@@ -36,7 +38,7 @@ class TestAllocation:
 
     def test_empty_allocation_is_noop(self):
         mgr = BudgetManager(dag_run_id="r", total_budget_usd=5.0)
-        mgr.allocate([])   # should not raise
+        mgr.allocate([])  # should not raise
         assert mgr.remaining_dag() == pytest.approx(5.0)
 
     def test_initial_allocation_events_logged(self):
@@ -48,6 +50,7 @@ class TestAllocation:
 # ---------------------------------------------------------------------------
 # Usage tracking
 # ---------------------------------------------------------------------------
+
 
 class TestUsageTracking:
     def test_record_usage_reduces_remaining(self):
@@ -76,7 +79,7 @@ class TestUsageTracking:
     def test_remaining_node_goes_negative_on_overrun(self):
         mgr = BudgetManager(dag_run_id="r", total_budget_usd=1.0)
         mgr.allocate(["n"])
-        mgr.record_usage("n", 2.0)   # over-run
+        mgr.record_usage("n", 2.0)  # over-run
         assert mgr.remaining_node("n") == pytest.approx(-1.0)
 
     def test_remaining_dag_goes_negative_on_overrun(self):
@@ -89,6 +92,7 @@ class TestUsageTracking:
 # ---------------------------------------------------------------------------
 # SharedContextView cap  [P5, P7]
 # ---------------------------------------------------------------------------
+
 
 class TestSharedContextCap:
     def test_cap_is_25_percent_of_allocation(self):
@@ -106,6 +110,7 @@ class TestSharedContextCap:
 # Pause threshold  [P7]
 # ---------------------------------------------------------------------------
 
+
 class TestPauseThreshold:
     def test_not_paused_when_budget_healthy(self):
         mgr = _mgr(total=5.0)
@@ -113,12 +118,12 @@ class TestPauseThreshold:
 
     def test_paused_at_5_percent(self):
         mgr = _mgr(total=5.0, nodes=["n"])
-        mgr.record_usage("n", 4.76)   # ~4.8% remaining → below threshold
+        mgr.record_usage("n", 4.76)  # ~4.8% remaining → below threshold
         assert mgr.should_pause() is True
 
     def test_exactly_at_threshold_is_paused(self):
         mgr = _mgr(total=5.0, nodes=["n"])
-        mgr.record_usage("n", 4.75)   # exactly 5% remaining ($0.25)
+        mgr.record_usage("n", 4.75)  # exactly 5% remaining ($0.25)
         assert mgr.should_pause() is True
 
     def test_is_over_budget_false_when_within(self):
@@ -141,6 +146,7 @@ class TestPauseThreshold:
 # ---------------------------------------------------------------------------
 # Utilization
 # ---------------------------------------------------------------------------
+
 
 class TestUtilization:
     def test_zero_utilization_on_init(self):
@@ -169,6 +175,7 @@ class TestUtilization:
 # Pause event
 # ---------------------------------------------------------------------------
 
+
 class TestPauseEvent:
     def test_record_pause_logs_event(self):
         mgr = _mgr(nodes=["a"])
@@ -181,6 +188,7 @@ class TestPauseEvent:
 # drain_events
 # ---------------------------------------------------------------------------
 
+
 class TestDrainEvents:
     def test_drain_returns_events_and_clears(self):
         mgr = _mgr(nodes=["a"])
@@ -191,7 +199,7 @@ class TestDrainEvents:
 
     def test_drain_twice_returns_only_new_events(self):
         mgr = _mgr(nodes=["a"])
-        mgr.drain_events()          # clear allocation events
+        mgr.drain_events()  # clear allocation events
         mgr.record_usage("a", 0.01)
         drained = mgr.drain_events()
         assert len(drained) == 1

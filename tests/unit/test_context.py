@@ -1,4 +1,5 @@
 """Unit tests for context/provider.py and context/shared.py."""
+
 from __future__ import annotations
 
 import json
@@ -25,9 +26,12 @@ from agent_agent.state import StateStore
 # Fixtures
 # ---------------------------------------------------------------------------
 
+
 def _make_shared_context() -> SharedContext:
     return SharedContext(
-        issue=IssueContext(url="https://github.com/org/repo/issues/7", title="Fix bug", body="body"),
+        issue=IssueContext(
+            url="https://github.com/org/repo/issues/7", title="Fix bug", body="body"
+        ),
         repo_metadata=RepoMetadata(path="/repo", default_branch="main", claude_md=""),
     )
 
@@ -35,6 +39,7 @@ def _make_shared_context() -> SharedContext:
 def _make_settings(usd_per_byte: float = 0.0) -> Settings:
     # Override the cached singleton for test isolation
     from unittest.mock import MagicMock
+
     s = MagicMock(spec=Settings)
     s.usd_per_byte = usd_per_byte
     return s  # type: ignore[return-value]
@@ -47,9 +52,15 @@ def _make_budget(dag_run_id: str = "run-1", total: float = 1.0) -> BudgetManager
 def _make_node(node_id: str, parent_ids: list[str] | None = None) -> DAGNode:
     now = datetime.now(timezone.utc)
     return DAGNode(
-        id=node_id, dag_run_id="run-1", type=NodeType.PLAN,
-        status=NodeStatus.PENDING, level=0, composite_id="X",
-        parent_node_ids=parent_ids or [], created_at=now, updated_at=now,
+        id=node_id,
+        dag_run_id="run-1",
+        type=NodeType.PLAN,
+        status=NodeStatus.PENDING,
+        level=0,
+        composite_id="X",
+        parent_node_ids=parent_ids or [],
+        created_at=now,
+        updated_at=now,
     )
 
 
@@ -62,6 +73,7 @@ async def _make_state() -> StateStore:
 # ---------------------------------------------------------------------------
 # issue field: always present, never summarized or omitted [P5.3]
 # ---------------------------------------------------------------------------
+
 
 async def test_issue_always_present() -> None:
     state = await _make_state()
@@ -111,6 +123,7 @@ async def test_issue_present_even_when_shared_view_truncated() -> None:
 # repo_metadata: always present, never capped or pruned [P5.3]
 # ---------------------------------------------------------------------------
 
+
 async def test_repo_metadata_always_present() -> None:
     state = await _make_state()
     shared = _make_shared_context()
@@ -144,6 +157,7 @@ async def test_repo_metadata_is_verbatim_not_pruned() -> None:
 # parent_outputs keyed by node_id
 # ---------------------------------------------------------------------------
 
+
 async def test_parent_outputs_keyed_by_node_id() -> None:
     from agent_agent.models.dag import ExecutionMeta, NodeResult
     from agent_agent.models.agent import PlanOutput
@@ -151,8 +165,12 @@ async def test_parent_outputs_keyed_by_node_id() -> None:
     state = await _make_state()
     now = datetime.now(timezone.utc)
     run = DAGRun(
-        id="run-1", issue_url="https://x", repo_path="/r",
-        budget_usd=1.0, created_at=now, updated_at=now,
+        id="run-1",
+        issue_url="https://x",
+        repo_path="/r",
+        budget_usd=1.0,
+        created_at=now,
+        updated_at=now,
     )
     await state.create_dag_run(run)
 
@@ -168,7 +186,9 @@ async def test_parent_outputs_keyed_by_node_id() -> None:
         dag_run_id="run-1",
         output=output,
         meta=ExecutionMeta(
-            attempt_number=1, started_at=now, completed_at=now,
+            attempt_number=1,
+            started_at=now,
+            completed_at=now,
         ),
     )
     await state.save_node_result(result)
@@ -201,6 +221,7 @@ async def test_parent_outputs_empty_when_no_parents() -> None:
 # AncestorContext: empty for two-level MVP DAG
 # ---------------------------------------------------------------------------
 
+
 async def test_ancestor_context_empty_for_two_level_dag() -> None:
     state = await _make_state()
     shared = _make_shared_context()
@@ -218,6 +239,7 @@ async def test_ancestor_context_empty_for_two_level_dag() -> None:
 # SharedContextView cap
 # ---------------------------------------------------------------------------
 
+
 async def test_cap_unenforced_when_usd_per_byte_zero() -> None:
     """All records included when usd_per_byte == 0."""
     state = await _make_state()
@@ -226,13 +248,15 @@ async def test_cap_unenforced_when_usd_per_byte_zero() -> None:
     shared.file_mappings.append(
         DiscoveryRecord(
             discovery=FileMapping(path="/a.py", description="desc", confidence=1.0),
-            source_node_id="prev", timestamp=now,
+            source_node_id="prev",
+            timestamp=now,
         )
     )
     shared.root_causes.append(
         DiscoveryRecord(
             discovery=RootCause(description="rc", evidence="ev", confidence=0.8),
-            source_node_id="prev", timestamp=now,
+            source_node_id="prev",
+            timestamp=now,
         )
     )
 
@@ -282,9 +306,8 @@ async def test_cap_enforced_truncation_drops_large_records() -> None:
     # Huge record (root_cause) should be dropped; small file_mapping included
     # Note: newest-first sort means the huge root_cause tries first and gets dropped,
     # then the small file_mapping fits.
-    total_included = (
-        len(ctx.shared_context_view.file_mappings)
-        + len(ctx.shared_context_view.root_causes)
+    total_included = len(ctx.shared_context_view.file_mappings) + len(
+        ctx.shared_context_view.root_causes
     )
     assert total_included < 2  # at least one was dropped
 
@@ -316,12 +339,17 @@ async def test_context_bytes_used_equals_byte_sum_of_included() -> None:
 # context/shared.py — append_discoveries
 # ---------------------------------------------------------------------------
 
+
 async def test_append_discoveries_updates_in_memory_and_state() -> None:
     state = await _make_state()
     now = datetime.now(timezone.utc)
     run = DAGRun(
-        id="run-2", issue_url="https://x", repo_path="/r",
-        budget_usd=1.0, created_at=now, updated_at=now,
+        id="run-2",
+        issue_url="https://x",
+        repo_path="/r",
+        budget_usd=1.0,
+        created_at=now,
+        updated_at=now,
     )
     await state.create_dag_run(run)
 
@@ -349,8 +377,12 @@ async def test_append_discoveries_conflict_detection_logs_warn() -> None:
     state = await _make_state()
     now = datetime.now(timezone.utc)
     run = DAGRun(
-        id="run-3", issue_url="https://x", repo_path="/r",
-        budget_usd=1.0, created_at=now, updated_at=now,
+        id="run-3",
+        issue_url="https://x",
+        repo_path="/r",
+        budget_usd=1.0,
+        created_at=now,
+        updated_at=now,
     )
     await state.create_dag_run(run)
 
@@ -358,8 +390,10 @@ async def test_append_discoveries_conflict_detection_logs_warn() -> None:
     disc = FileMapping(path="/dup.py", description="first", confidence=1.0)
     await append_discoveries(
         [disc],  # type: ignore[list-item]
-        source_node_id="n1", dag_run_id="run-3",
-        shared_context=shared, state=state,
+        source_node_id="n1",
+        dag_run_id="run-3",
+        shared_context=shared,
+        state=state,
     )
 
     # Second write to same path → structlog warning
@@ -372,8 +406,10 @@ async def test_append_discoveries_conflict_detection_logs_warn() -> None:
 
         await append_discoveries(
             [disc2],  # type: ignore[list-item]
-            source_node_id="n2", dag_run_id="run-3",
-            shared_context=shared, state=state,
+            source_node_id="n2",
+            dag_run_id="run-3",
+            shared_context=shared,
+            state=state,
         )
 
     assert any("conflict" in w.lower() or "potential_conflict" in w for w in warning_calls), (

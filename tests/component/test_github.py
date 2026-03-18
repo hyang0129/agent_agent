@@ -6,6 +6,7 @@ Tests:
   - Issue fetch: assert IssueContext fields populated from real response
   - DRY_RUN_GITHUB guard: assert write methods raise when dry_run=True
 """
+
 from __future__ import annotations
 
 import pytest
@@ -17,9 +18,7 @@ from agent_agent.github.client import GitHubClient, parse_issue_url
 class TestGitHubClientLive:
     """Live GitHub API tests — requires GITHUB_TOKEN and github_test_repo fixture."""
 
-    async def test_fetch_issue_populates_context(
-        self, github_test_repo: tuple[str, int]
-    ) -> None:
+    async def test_fetch_issue_populates_context(self, github_test_repo: tuple[str, int]) -> None:
         full_name, issue_number = github_test_repo
         owner, repo = full_name.split("/")
 
@@ -30,9 +29,7 @@ class TestGitHubClientLive:
         assert ctx.title == "Test issue for agent-agent"
         assert "test issue" in ctx.body.lower()
 
-    async def test_dry_run_blocks_write(
-        self, github_test_repo: tuple[str, int]
-    ) -> None:
+    async def test_dry_run_blocks_write(self, github_test_repo: tuple[str, int]) -> None:
         full_name, _ = github_test_repo
         owner, repo = full_name.split("/")
 
@@ -45,9 +42,7 @@ class TestGitHubClientUnit:
     """Unit tests for the GitHub client — no GITHUB_TOKEN needed."""
 
     def test_parse_issue_url_valid(self) -> None:
-        owner, repo, number = parse_issue_url(
-            "https://github.com/anthropics/claude-code/issues/42"
-        )
+        owner, repo, number = parse_issue_url("https://github.com/anthropics/claude-code/issues/42")
         assert owner == "anthropics"
         assert repo == "claude-code"
         assert number == 42

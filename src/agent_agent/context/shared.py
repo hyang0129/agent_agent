@@ -5,6 +5,7 @@ Agents propose discoveries via their output; the executor validates and commits 
 
 Conflict detection is deferred to Phase 6. MVP: last-write-wins + structlog warning.
 """
+
 from __future__ import annotations
 
 import uuid
@@ -84,17 +85,13 @@ async def append_discoveries(
         )
 
 
-def _has_potential_conflict(
-    incoming: Discovery, existing: list[DiscoveryRecord]
-) -> bool:
+def _has_potential_conflict(incoming: Discovery, existing: list[DiscoveryRecord]) -> bool:
     """Heuristic conflict check. MVP: detects duplicate paths for file_mappings."""
     if not existing:
         return False
 
     incoming_path: str | None = getattr(incoming, "path", None)
     if incoming_path is not None:
-        return any(
-            getattr(r.discovery, "path", None) == incoming_path for r in existing
-        )
+        return any(getattr(r.discovery, "path", None) == incoming_path for r in existing)
 
     return False

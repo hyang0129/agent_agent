@@ -8,6 +8,7 @@ Three levels per P11:
 emit_event() is NON-FATAL — failures are written to stderr and never block execution.
 All records include dag_run_id + node_id on every line [P11].
 """
+
 from __future__ import annotations
 
 import sys

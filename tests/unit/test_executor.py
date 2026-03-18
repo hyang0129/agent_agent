@@ -1,4 +1,5 @@
 """Unit tests for dag/executor.py — dispatch, Review gate, failure classification, pause."""
+
 from __future__ import annotations
 
 from datetime import datetime, timezone
@@ -30,6 +31,7 @@ from agent_agent.state import StateStore
 # Helpers
 # ---------------------------------------------------------------------------
 
+
 def _make_settings() -> Settings:
     s = MagicMock(spec=Settings)
     s.usd_per_byte = 0.0
@@ -52,9 +54,12 @@ async def _make_state() -> StateStore:
 def _make_run(run_id: str = "run-1", budget: float = 10.0) -> DAGRun:
     now = datetime.now(timezone.utc)
     return DAGRun(
-        id=run_id, issue_url="https://github.com/o/r/issues/1",
-        repo_path="/repo", budget_usd=budget,
-        created_at=now, updated_at=now,
+        id=run_id,
+        issue_url="https://github.com/o/r/issues/1",
+        repo_path="/repo",
+        budget_usd=budget,
+        created_at=now,
+        updated_at=now,
     )
 
 
@@ -69,6 +74,7 @@ def _make_stub_agent(output_map: dict[str, tuple] | None = None):
 
     output_map: {node_id: (AgentOutput, cost_usd)}  — defaults per node type.
     """
+
     async def agent_fn(node: DAGNode, ctx):  # type: ignore[no-untyped-def]
         if output_map and node.id in output_map:
             return output_map[node.id]
@@ -80,10 +86,9 @@ def _make_stub_agent(output_map: dict[str, tuple] | None = None):
                 branch_name=f"agent/stub/{node.composite_id}",
             ), 0.0
         elif node.type == NodeType.REVIEW:
-            return ReviewOutput(
-                verdict=ReviewVerdict.APPROVED, summary="stub review"
-            ), 0.0
+            return ReviewOutput(verdict=ReviewVerdict.APPROVED, summary="stub review"), 0.0
         raise ValueError(f"unknown node type {node.type}")
+
     return agent_fn
 
 
@@ -103,20 +108,26 @@ def _make_executor(state: StateStore, budget: BudgetManager, agent_fn) -> DAGExe
 # classify_failure
 # ---------------------------------------------------------------------------
 
+
 def test_classify_transient() -> None:
     assert classify_failure(TransientError("net")) == FailureCategory.TRANSIENT
+
 
 def test_classify_agent_error() -> None:
     assert classify_failure(AgentError("bad")) == FailureCategory.AGENT_ERROR
 
+
 def test_classify_resource_exhaustion() -> None:
     assert classify_failure(ResourceExhaustionError()) == FailureCategory.RESOURCE_EXHAUSTION
+
 
 def test_classify_deterministic() -> None:
     assert classify_failure(DeterministicError()) == FailureCategory.DETERMINISTIC
 
+
 def test_classify_safety_violation() -> None:
     assert classify_failure(SafetyViolationError()) == FailureCategory.SAFETY_VIOLATION
+
 
 def test_classify_unknown() -> None:
     assert classify_failure(RuntimeError("weird")) == FailureCategory.UNKNOWN
@@ -125,6 +136,7 @@ def test_classify_unknown() -> None:
 # ---------------------------------------------------------------------------
 # Dispatch order
 # ---------------------------------------------------------------------------
+
 
 async def test_dispatch_order() -> None:
     """Nodes must complete in topological order: L0-plan → L1-coding → L1-review → L1-plan."""
@@ -176,6 +188,7 @@ async def test_dag_completed_after_successful_run() -> None:
 # ---------------------------------------------------------------------------
 # Review gate
 # ---------------------------------------------------------------------------
+
 
 async def test_review_gate_branch_name_none_blocks_dispatch() -> None:
     """If coding node has no branch_name in the state store, Review is not dispatched."""
@@ -241,6 +254,7 @@ async def test_review_gate_branch_name_set_dispatches() -> None:
 # Pause after budget overrun
 # ---------------------------------------------------------------------------
 
+
 async def test_pause_after_overrun() -> None:
     """Stub agent over-spends → DAG status = PAUSED; pending nodes remain PENDING."""
     state = await _make_state()
@@ -280,6 +294,7 @@ async def test_pause_after_overrun() -> None:
 # Rerun cap [P10.9]
 # ---------------------------------------------------------------------------
 
+
 async def test_rerun_cap_node_fails_twice_escalated() -> None:
     """Node fails twice with AgentError → third invocation not attempted → escalation."""
     state = await _make_state()
@@ -317,6 +332,7 @@ async def test_rerun_cap_node_fails_twice_escalated() -> None:
 # No-retry failures [P10.9]
 # ---------------------------------------------------------------------------
 
+
 async def test_safety_violation_escalated_on_first_occurrence() -> None:
     """SafetyViolationError → CRITICAL escalation on first invocation; no second attempt."""
     state = await _make_state()
@@ -338,6 +354,7 @@ async def test_safety_violation_escalated_on_first_occurrence() -> None:
     assert invocations["n"] == 1  # no second invocation
 
     from agent_agent.models.escalation import EscalationSeverity
+
     escalations = await state.list_escalations(run.id)
     assert len(escalations) == 1
     assert escalations[0].severity == EscalationSeverity.CRITICAL
@@ -390,6 +407,7 @@ async def test_deterministic_error_escalated_immediately() -> None:
 # ---------------------------------------------------------------------------
 # Transient retry [P10.7]
 # ---------------------------------------------------------------------------
+
 
 async def test_transient_retry_succeeds_on_third_attempt() -> None:
     """TransientError twice → success on third; retry_count=2; no rerun; COMPLETED."""

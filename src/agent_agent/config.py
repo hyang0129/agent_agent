@@ -32,10 +32,23 @@ class Settings(BaseSettings):
     git_push_enabled: bool = False
     dry_run_github: bool = True
     max_budget_usd: float = 5.0
-    usd_per_byte: float = 0.0       # profiling placeholder; 0 disables USD-based context cap
+    usd_per_byte: float = 0.0  # profiling placeholder; 0 disables USD-based context cap
     worktree_base_dir: str | None = None  # required at runtime; WorktreeManager raises if None
     port: int = 8100
     max_workers: int = 1
+
+    # PlanComposite tuning — disable thinking / lower turns for non-prod envs
+    plan_use_thinking: bool = True
+    plan_thinking_budget_tokens: int = 10000
+    plan_effort: str = "high"
+    plan_max_turns: int = 100
+
+    # CodingComposite sub-agent turn caps
+    programmer_max_turns: int = 100
+    test_designer_max_turns: int = 100
+    test_executor_max_turns: int = 100
+    debugger_max_turns: int = 100
+    reviewer_max_turns: int = 100
 
     @computed_field  # type: ignore[prop-decorator]
     @property
@@ -67,9 +80,7 @@ def configure_logging(settings: Settings | None = None) -> None:
 
     structlog.configure(
         processors=processors,
-        wrapper_class=structlog.make_filtering_bound_logger(
-            getattr(__import__("logging"), level)
-        ),
+        wrapper_class=structlog.make_filtering_bound_logger(getattr(__import__("logging"), level)),
         context_class=dict,
         logger_factory=structlog.PrintLoggerFactory(),
         cache_logger_on_first_use=True,

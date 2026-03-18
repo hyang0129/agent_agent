@@ -2,6 +2,7 @@
 
 All inter-node data uses these canonical models. See data-models.md for field specs.
 """
+
 from __future__ import annotations
 
 from enum import Enum
@@ -61,20 +62,20 @@ Discovery = Annotated[
 
 
 class CompositeSpec(BaseModel):
-    id: str                      # short label: "A", "B", "C" — used in branch names + logs
-    scope: str                   # what this composite is responsible for
-    branch_suffix: str           # used in agent/<issue-number>/<branch_suffix>
+    id: str  # short label: "A", "B", "C" — used in branch names + logs
+    scope: str  # what this composite is responsible for
+    branch_suffix: str  # used in agent/<issue-number>/<branch_suffix>
 
 
 class SequentialEdge(BaseModel):
-    from_composite_id: str       # Review of this composite must complete first
-    to_composite_id: str         # before this Coding composite may start
+    from_composite_id: str  # Review of this composite must complete first
+    to_composite_id: str  # before this Coding composite may start
 
 
 class ChildDAGSpec(BaseModel):
     composites: list[CompositeSpec]
     sequential_edges: list[SequentialEdge] = []
-    justification: str | None = None   # required when len(composites) >= 6
+    justification: str | None = None  # required when len(composites) >= 6
 
 
 # ---------------------------------------------------------------------------
@@ -85,7 +86,7 @@ class ChildDAGSpec(BaseModel):
 class PlanOutput(BaseModel):
     type: Literal["plan"] = "plan"
     investigation_summary: str
-    child_dag: ChildDAGSpec | None = None   # None = work complete
+    child_dag: ChildDAGSpec | None = None  # None = work complete
     discoveries: list[Discovery] = []
 
 
@@ -114,7 +115,7 @@ class AgentTestOutput(BaseModel):
     passed: bool | None = None
     total_tests: int | None = None
     failed_tests: int | None = None
-    failure_details: str | None = None   # raw output, truncated to 2000 chars
+    failure_details: str | None = None  # raw output, truncated to 2000 chars
     discoveries: list[Discovery] = []
 
 

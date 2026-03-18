@@ -1,4 +1,5 @@
 """Tests for Pydantic model validation and AgentOutput union discrimination."""
+
 from __future__ import annotations
 
 import pytest
@@ -41,6 +42,7 @@ _discovery_adapter: TypeAdapter[Discovery] = TypeAdapter(Discovery)  # type: ign
 # Discovery types
 # ---------------------------------------------------------------------------
 
+
 class TestDiscoveryTypes:
     def test_file_mapping_round_trip(self):
         d = FileMapping(path="src/auth.py", description="token validation", confidence=0.9)
@@ -81,6 +83,7 @@ class TestDiscoveryTypes:
 # AgentOutput union discrimination
 # ---------------------------------------------------------------------------
 
+
 class TestAgentOutputUnion:
     def test_plan_output_discriminated(self):
         raw = {"type": "plan", "investigation_summary": "looks good"}
@@ -94,7 +97,12 @@ class TestAgentOutputUnion:
         assert isinstance(out, CodeOutput)
 
     def test_test_output_plan_role(self):
-        raw = {"type": "test", "role": "plan", "summary": "test plan here", "test_plan": "run pytest"}
+        raw = {
+            "type": "test",
+            "role": "plan",
+            "summary": "test plan here",
+            "test_plan": "run pytest",
+        }
         out = _agent_output_adapter.validate_python(raw)
         assert isinstance(out, AgentTestOutput)
         assert out.role == AgentTestRole.PLAN
@@ -110,9 +118,10 @@ class TestAgentOutputUnion:
             _agent_output_adapter.validate_python({"type": "unknown", "summary": "x"})
 
     def test_json_round_trip(self):
-        original = PlanOutput(investigation_summary="summary", discoveries=[
-            FileMapping(path="a.py", description="desc", confidence=0.5)
-        ])
+        original = PlanOutput(
+            investigation_summary="summary",
+            discoveries=[FileMapping(path="a.py", description="desc", confidence=0.5)],
+        )
         json_str = original.model_dump_json()
         restored = _agent_output_adapter.validate_json(json_str)
         assert isinstance(restored, PlanOutput)
@@ -123,12 +132,15 @@ class TestAgentOutputUnion:
 # ChildDAGSpec
 # ---------------------------------------------------------------------------
 
+
 class TestChildDAGSpec:
     def test_valid_spec(self):
-        spec = ChildDAGSpec(composites=[
-            CompositeSpec(id="A", scope="add logging", branch_suffix="add-logging"),
-            CompositeSpec(id="B", scope="add tests", branch_suffix="add-tests"),
-        ])
+        spec = ChildDAGSpec(
+            composites=[
+                CompositeSpec(id="A", scope="add logging", branch_suffix="add-logging"),
+                CompositeSpec(id="B", scope="add tests", branch_suffix="add-tests"),
+            ]
+        )
         assert len(spec.composites) == 2
         assert spec.sequential_edges == []
 
@@ -151,6 +163,7 @@ class TestChildDAGSpec:
 # ReviewFinding severity
 # ---------------------------------------------------------------------------
 
+
 class TestReviewOutput:
     def test_finding_severities(self):
         out = ReviewOutput(
@@ -171,6 +184,7 @@ class TestReviewOutput:
 # ---------------------------------------------------------------------------
 # NodeContext
 # ---------------------------------------------------------------------------
+
 
 class TestNodeContext:
     def _issue(self) -> IssueContext:
@@ -229,6 +243,7 @@ class TestBudgetEventModel:
     def test_usd_fields_are_float(self):
         from datetime import datetime, timezone
         import uuid
+
         event = BudgetEvent(
             id=str(uuid.uuid4()),
             dag_run_id="run-1",

@@ -1,4 +1,5 @@
 """Tests for the config system."""
+
 from __future__ import annotations
 
 import os

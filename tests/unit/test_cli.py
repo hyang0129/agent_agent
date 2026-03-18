@@ -8,6 +8,7 @@ Tests:
   - bootstrap stub exit (code=2 + message)
   - port conflict → exit with clear error
 """
+
 from __future__ import annotations
 
 import os
@@ -54,8 +55,9 @@ def test_run_rejects_self_repo(tmp_path: Path) -> None:
     """--repo pointing to agent_agent's own tree should be rejected."""
     # The agent_agent package lives under src/agent_agent/
     self_repo = Path(__file__).resolve().parent.parent.parent  # tests -> repo root
-    result = runner.invoke(app, ["run", "--issue", "https://github.com/a/b/issues/1",
-                                  "--repo", str(self_repo)])
+    result = runner.invoke(
+        app, ["run", "--issue", "https://github.com/a/b/issues/1", "--repo", str(self_repo)]
+    )
     assert result.exit_code == 1
     assert "agent_agent's own installation directory" in result.output
 
@@ -72,8 +74,9 @@ def test_run_rejects_missing_claude_md(tmp_path: Path) -> None:
     (repo / "docs" / "policies").mkdir(parents=True)
     (repo / "docs" / "policies" / "POLICY_INDEX.md").write_text("# Policies\n")
 
-    result = runner.invoke(app, ["run", "--issue", "https://github.com/a/b/issues/1",
-                                  "--repo", str(repo)])
+    result = runner.invoke(
+        app, ["run", "--issue", "https://github.com/a/b/issues/1", "--repo", str(repo)]
+    )
     assert result.exit_code == 1
     assert "CLAUDE.md" in result.output
 
@@ -89,8 +92,9 @@ def test_run_rejects_missing_policy_index(tmp_path: Path) -> None:
     (repo / "CLAUDE.md").write_text("# Target\n")
     # No policy index
 
-    result = runner.invoke(app, ["run", "--issue", "https://github.com/a/b/issues/1",
-                                  "--repo", str(repo)])
+    result = runner.invoke(
+        app, ["run", "--issue", "https://github.com/a/b/issues/1", "--repo", str(repo)]
+    )
     assert result.exit_code == 1
     assert "POLICY_INDEX.md" in result.output
     # Must NOT mention "bootstrap" or "agent-agent bootstrap" [§2 prohibition]
@@ -114,15 +118,19 @@ def test_run_port_conflict(target_repo: Path) -> None:
         with patch.dict(os.environ, {"AGENT_AGENT_PORT": str(port)}):
             # Clear cached settings so new env var takes effect
             from agent_agent.config import get_settings
+
             get_settings.cache_clear()
 
-            result = runner.invoke(app, ["run", "--issue", "https://github.com/a/b/issues/1",
-                                          "--repo", str(target_repo)])
+            result = runner.invoke(
+                app,
+                ["run", "--issue", "https://github.com/a/b/issues/1", "--repo", str(target_repo)],
+            )
             assert result.exit_code == 1
             assert "already in use" in result.output
     finally:
         sock.close()
         from agent_agent.config import get_settings
+
         get_settings.cache_clear()
 
 
@@ -132,7 +140,9 @@ def test_run_port_conflict(target_repo: Path) -> None:
 
 
 def test_run_rejects_nonexistent_repo() -> None:
-    result = runner.invoke(app, ["run", "--issue", "https://github.com/a/b/issues/1",
-                                  "--repo", "/nonexistent/path/abc123"])
+    result = runner.invoke(
+        app,
+        ["run", "--issue", "https://github.com/a/b/issues/1", "--repo", "/nonexistent/path/abc123"],
+    )
     assert result.exit_code == 1
     assert "does not exist" in result.output

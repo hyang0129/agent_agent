@@ -1,4 +1,5 @@
 """Unit tests for dag/engine.py — construction, topological sort, dependency resolution."""
+
 from __future__ import annotations
 
 from datetime import datetime, timezone
@@ -12,6 +13,7 @@ from agent_agent.models.dag import DAGRun, DAGRunStatus, NodeType
 # ---------------------------------------------------------------------------
 # Fixtures
 # ---------------------------------------------------------------------------
+
 
 def _make_run() -> DAGRun:
     now = datetime.now(timezone.utc)
@@ -29,6 +31,7 @@ def _make_run() -> DAGRun:
 # ---------------------------------------------------------------------------
 # L0 DAG structure
 # ---------------------------------------------------------------------------
+
 
 def test_l0_has_one_plan_node() -> None:
     nodes = build_stub_dag(_make_run())
@@ -56,6 +59,7 @@ def test_l0_plan_points_to_l1_coding() -> None:
 # ---------------------------------------------------------------------------
 # L1 child DAG structure
 # ---------------------------------------------------------------------------
+
 
 def test_l1_has_coding_review_plan() -> None:
     nodes = build_stub_dag(_make_run())
@@ -109,6 +113,7 @@ def test_total_node_count() -> None:
 # Topological sort
 # ---------------------------------------------------------------------------
 
+
 def test_topological_sort_order() -> None:
     """L0-PLAN must come before all L1 nodes; L1-CODING before REVIEW; REVIEW before PLAN."""
     nodes = build_stub_dag(_make_run())
@@ -138,12 +143,26 @@ def test_topological_sort_cycle_raises() -> None:
 
     now = datetime.now(timezone.utc)
     a = DAGNode(
-        id="a", dag_run_id="r", type=NodeType.PLAN, status=NodeStatus.PENDING,
-        level=0, composite_id="A", parent_node_ids=["b"], created_at=now, updated_at=now,
+        id="a",
+        dag_run_id="r",
+        type=NodeType.PLAN,
+        status=NodeStatus.PENDING,
+        level=0,
+        composite_id="A",
+        parent_node_ids=["b"],
+        created_at=now,
+        updated_at=now,
     )
     b = DAGNode(
-        id="b", dag_run_id="r", type=NodeType.PLAN, status=NodeStatus.PENDING,
-        level=0, composite_id="B", parent_node_ids=["a"], created_at=now, updated_at=now,
+        id="b",
+        dag_run_id="r",
+        type=NodeType.PLAN,
+        status=NodeStatus.PENDING,
+        level=0,
+        composite_id="B",
+        parent_node_ids=["a"],
+        created_at=now,
+        updated_at=now,
     )
     with pytest.raises(ValueError, match="cycle"):
         topological_sort([a, b])

@@ -7,6 +7,7 @@ Pause semantics: nodes are never interrupted mid-execution. After a node
 completes and its cost is recorded, the executor calls should_pause() to
 decide whether to dispatch further nodes.
 """
+
 from __future__ import annotations
 
 import uuid
@@ -29,13 +30,15 @@ class BudgetManager:
     def __init__(self, dag_run_id: str, total_budget_usd: float) -> None:
         self.dag_run_id = dag_run_id
         self.total_budget_usd = total_budget_usd
-        self._allocations: dict[str, float] = {}   # node_id -> allocated USD
-        self._used: dict[str, float] = {}           # node_id -> USD consumed
+        self._allocations: dict[str, float] = {}  # node_id -> allocated USD
+        self._used: dict[str, float] = {}  # node_id -> USD consumed
         self.events: list[BudgetEvent] = []
 
     # ------------------------------------------------------------------
     # Allocation
     # ------------------------------------------------------------------
+
+    MIN_NODE_BUDGET_USD = 0.10  # minimum viable budget per child node
 
     def allocate(self, node_ids: list[str]) -> None:
         """MVP stub: split budget equally across all nodes."""
@@ -55,6 +58,37 @@ class BudgetManager:
                 f"equal split: ${per_node:.4f} per node ({len(node_ids)} nodes)",
             )
 
+    def allocate_child(self, node_ids: list[str]) -> None:
+        """Allocate remaining budget equally across child DAG nodes.
+
+        Called when a child DAG is spawned. Uses the remaining budget
+        (not the total budget) for the split.
+
+        Raises ResourceExhaustionError if per-node budget < MIN_NODE_BUDGET_USD.
+        """
+        from .dag.executor import ResourceExhaustionError
+
+        remaining = self.remaining_dag()
+        if remaining <= 0 or not node_ids:
+            return
+        per_node = remaining / len(node_ids)
+        if per_node < self.MIN_NODE_BUDGET_USD:
+            raise ResourceExhaustionError(
+                f"Insufficient budget for child DAG: ${per_node:.4f} per node "
+                f"(minimum ${self.MIN_NODE_BUDGET_USD}), {len(node_ids)} nodes, "
+                f"${remaining:.4f} remaining"
+            )
+        for node_id in node_ids:
+            self._allocations[node_id] = per_node
+            self._used[node_id] = 0.0
+            self._log(
+                node_id,
+                BudgetEventType.INITIAL_ALLOCATION,
+                remaining,
+                remaining,
+                f"child DAG allocation: ${per_node:.4f} per node ({len(node_ids)} nodes)",
+            )
+
     # ------------------------------------------------------------------
     # Usage tracking
     # ------------------------------------------------------------------
@@ -65,8 +99,9 @@ class BudgetManager:
             raise KeyError(f"Unknown node: {node_id!r} — call allocate() first.")
         before = self._used[node_id]
         self._used[node_id] += usd
-        self._log(node_id, BudgetEventType.USAGE, before, self._used[node_id],
-                  f"recorded ${usd:.6f}")
+        self._log(
+            node_id, BudgetEventType.USAGE, before, self._used[node_id], f"recorded ${usd:.6f}"
+        )
 
     # ------------------------------------------------------------------
     # Caps and thresholds  [P7]
@@ -124,11 +159,14 @@ class BudgetManager:
     def record_pause(self) -> None:
         """Record that the DAG was paused due to budget threshold."""
         remaining = self.remaining_dag()
-        self._log(None, BudgetEventType.PAUSE,
-                  remaining + sum(self._used.values()),   # i.e. total_budget_usd
-                  remaining,
-                  f"DAG paused: remaining ${remaining:.4f} ≤ 5% threshold "
-                  f"(${self.total_budget_usd * 0.05:.4f})")
+        self._log(
+            None,
+            BudgetEventType.PAUSE,
+            remaining + sum(self._used.values()),  # i.e. total_budget_usd
+            remaining,
+            f"DAG paused: remaining ${remaining:.4f} ≤ 5% threshold "
+            f"(${self.total_budget_usd * 0.05:.4f})",
+        )
 
     # ------------------------------------------------------------------
     # Internal

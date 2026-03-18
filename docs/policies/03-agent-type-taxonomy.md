@@ -28,7 +28,7 @@ Sub-agents are not interchangeable across composites. The Programmer cannot be i
 | **ResearchPlannerOrchestrator** | Read files, read GitHub, read git history, DAG plan construction, child DAG spawning | Write files, touch git, create or comment on PRs |
 | **Programmer** | Read files, write files, git operations within worktree | Create or comment on PRs, touch files outside worktree |
 | **Test Designer** | Read files, read test suite | Write source files, run test commands |
-| **Test Executor** | Read files, run test suite commands | Write source files, git operations |
+| **Test Executor** | Read files, run test suite commands, write temporary/generated files during test execution | Net-modify source files committed by Programmer (validated post-execution via git diff), git operations |
 | **Debugger** | Read files, write files, git operations within worktree | Create or comment on PRs, touch files outside worktree |
 | **Reviewer** | Read files, read diffs, read git history, read GitHub PRs | Write files, touch git, merge PRs |
 

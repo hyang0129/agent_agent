@@ -13,6 +13,7 @@
 `bootstrap`:
   - Stub: exit code 2 + message. MUST NOT suggest running agent-agent bootstrap.
 """
+
 from __future__ import annotations
 
 import asyncio
@@ -178,8 +179,5 @@ def bootstrap() -> None:
 
     NOTE: This command is not yet implemented.
     """
-    typer.echo(
-        "bootstrap is not yet implemented. "
-        "Run `agent-agent --help` for available commands."
-    )
+    typer.echo("bootstrap is not yet implemented. Run `agent-agent --help` for available commands.")
     raise typer.Exit(code=2)

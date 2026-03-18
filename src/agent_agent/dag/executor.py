@@ -19,12 +19,14 @@ Review dispatch gate:
   sets a fake branch name; the check is against the persisted state.
 
 Child DAG recursion (Phase 4):
-  If the terminal Plan output has a non-null child_dag, raise NotImplementedError.
+  If the terminal Plan output has a non-null child_dag, spawn a child DAG
+  via _spawn_child_dag(). Nesting is capped at level 4 [P1.10].
 
 P11 Source-of-Truth rule:
   SQLite writes are fatal (surface + halt on failure).
   emit_event failures are non-fatal (logged to stderr, never block execution).
 """
+
 from __future__ import annotations
 
 import asyncio
@@ -39,7 +41,7 @@ from ..budget import BudgetManager
 from ..config import Settings
 from ..context.provider import ContextProvider
 from ..context.shared import append_discoveries
-from ..models.agent import AgentOutput, CodeOutput, PlanOutput
+from ..models.agent import AgentOutput, ChildDAGSpec, CodeOutput, PlanOutput
 from ..models.budget import BudgetEventType
 from ..models.context import NodeContext
 from ..models.dag import (
@@ -54,6 +56,7 @@ from ..models.dag import (
 from ..models.escalation import EscalationRecord, EscalationSeverity, EscalationStatus
 from ..observability import EventType, emit_event
 from ..state import StateStore
+from ..worktree import WorktreeManager, WorktreeRecord
 from .engine import topological_sort
 
 _logger = structlog.get_logger(__name__)
@@ -61,13 +64,14 @@ _logger = structlog.get_logger(__name__)
 # ---------------------------------------------------------------------------
 # Retry constants
 # ---------------------------------------------------------------------------
-MAX_TRANSIENT_ATTEMPTS = 3   # 3 total attempts (2 retries) for transient errors
-MAX_RERUNS = 1               # max re-invocations for AgentError / Unknown [P10.9]
+MAX_TRANSIENT_ATTEMPTS = 3  # 3 total attempts (2 retries) for transient errors
+MAX_RERUNS = 1  # max re-invocations for AgentError / Unknown [P10.9]
 
 
 # ---------------------------------------------------------------------------
 # Failure classification
 # ---------------------------------------------------------------------------
+
 
 class FailureCategory(str, Enum):
     TRANSIENT = "transient"
@@ -125,6 +129,7 @@ AgentFn = Callable[[DAGNode, NodeContext], Awaitable[tuple[AgentOutput, float]]]
 # DAGExecutor
 # ---------------------------------------------------------------------------
 
+
 class DAGExecutor:
     """Orchestrates node dispatch for a single DAG run.
 
@@ -143,14 +148,24 @@ class DAGExecutor:
         state: StateStore,
         budget: BudgetManager,
         context_provider: ContextProvider,
-        agent_fn: AgentFn,
+        agent_fn: AgentFn | None,
         settings: Settings,
+        *,
+        worktree_manager: WorktreeManager | None = None,
+        repo_path: str | None = None,
+        issue_number: str | None = None,
     ) -> None:
         self._state = state
         self._budget = budget
         self._ctx = context_provider
         self._agent_fn = agent_fn
         self._settings = settings
+        self._worktree_mgr = worktree_manager
+        self._repo_path = repo_path
+        self._issue_number = issue_number or "0"
+        self._worktrees: dict[str, WorktreeRecord] = {}
+        self._coding_counter = 0
+        self._review_counter = 0
 
     async def execute(self, dag_run: DAGRun, nodes: list[DAGNode]) -> None:
         """Execute a DAG run to completion, pause, or failure.
@@ -299,12 +314,9 @@ class DAGExecutor:
                         state=self._state,
                     )
 
-                # Phase 4 wiring point: if terminal Plan has child_dag → recurse
+                # Phase 4: if terminal Plan has child_dag → recurse
                 if isinstance(result.output, PlanOutput) and result.output.child_dag is not None:
-                    raise NotImplementedError(
-                        "Child DAG spawning is not implemented in Phase 2. "
-                        "Wire recursive dispatch in Phase 4."
-                    )
+                    await self._spawn_child_dag(dag_run, node, result.output.child_dag, all_nodes)
 
                 return True
 
@@ -357,7 +369,12 @@ class DAGExecutor:
 
         for attempt in range(MAX_TRANSIENT_ATTEMPTS):
             try:
-                output, cost_usd = await self._agent_fn(node, context)
+                if self._agent_fn is not None:
+                    output, cost_usd = await self._agent_fn(node, context)
+                else:
+                    output, cost_usd = await self._dispatch_composite(
+                        node, context, dag_run, all_nodes
+                    )
                 completed_at = datetime.now(timezone.utc)
 
                 meta = ExecutionMeta(
@@ -434,6 +451,299 @@ class DAGExecutor:
 
         # Should be unreachable
         return None, RuntimeError("unreachable"), FailureCategory.UNKNOWN
+
+    # ------------------------------------------------------------------
+    # Composite dispatch (Phase 4)
+    # ------------------------------------------------------------------
+
+    async def _dispatch_composite(
+        self, node: DAGNode, context: NodeContext, dag_run: DAGRun, all_nodes: list[DAGNode]
+    ) -> tuple[AgentOutput, float]:
+        """Dispatch a real composite agent (Phase 4 replacement for stub AgentFn)."""
+        if node.type == NodeType.PLAN:
+            return await self._dispatch_plan(node, context, dag_run, all_nodes)
+        elif node.type == NodeType.CODING:
+            return await self._dispatch_coding(node, context, dag_run)
+        elif node.type == NodeType.REVIEW:
+            return await self._dispatch_review(node, context, dag_run, all_nodes)
+        else:
+            raise ValueError(f"Unknown node type: {node.type}")
+
+    async def _dispatch_plan(
+        self, node: DAGNode, context: NodeContext, dag_run: DAGRun, all_nodes: list[DAGNode]
+    ) -> tuple[AgentOutput, float]:
+        from ..agents.plan import PlanComposite
+
+        # Determine if consolidation: any parent is a Review node
+        is_consolidation = any(
+            n.type == NodeType.REVIEW for n in all_nodes if n.id in node.parent_node_ids
+        )
+        composite = PlanComposite(
+            settings=self._settings,
+            repo_path=dag_run.repo_path,
+            budget=self._budget,
+        )
+        return await composite.execute(
+            node_context=context,
+            dag_run_id=dag_run.id,
+            node_id=node.id,
+            is_consolidation=is_consolidation,
+        )
+
+    async def _dispatch_coding(
+        self, node: DAGNode, context: NodeContext, dag_run: DAGRun
+    ) -> tuple[AgentOutput, float]:
+        from ..agents.coding import CodingComposite
+
+        if self._worktree_mgr is None:
+            raise ValueError("WorktreeManager required for Coding nodes")
+        if self._repo_path is None:
+            raise ValueError("repo_path required for Coding nodes")
+
+        self._coding_counter += 1
+        worktree = await self._worktree_mgr.create_coding_worktree(
+            repo_path=self._repo_path,
+            dag_run_id=dag_run.id,
+            node_id=node.id,
+            n=self._coding_counter,
+        )
+        self._worktrees[node.id] = worktree
+
+        # Update node with worktree_path
+        await self._state.update_dag_node_worktree(node.id, worktree.path, worktree.branch)
+
+        try:
+            composite = CodingComposite(
+                settings=self._settings,
+                state=self._state,
+                budget=self._budget,
+                worktree=worktree,
+                repo_path=self._repo_path,
+                issue_number=self._issue_number,
+                node_id=node.id,
+            )
+            output, cost = await composite.execute(
+                node_context=context,
+                dag_run_id=dag_run.id,
+                node_id=node.id,
+            )
+            return output, cost
+        finally:
+            await self._worktree_mgr.remove_worktree(self._repo_path, worktree.path)
+
+    async def _dispatch_review(
+        self, node: DAGNode, context: NodeContext, dag_run: DAGRun, all_nodes: list[DAGNode]
+    ) -> tuple[AgentOutput, float]:
+        from ..agents.review import ReviewComposite
+
+        if self._worktree_mgr is None:
+            raise ValueError("WorktreeManager required for Review nodes")
+        if self._repo_path is None:
+            raise ValueError("repo_path required for Review nodes")
+
+        # Find the paired Coding node's branch
+        coding_node = None
+        for parent_id in node.parent_node_ids:
+            for n in all_nodes:
+                if n.id == parent_id and n.type == NodeType.CODING:
+                    coding_node = n
+                    break
+
+        if coding_node is None:
+            raise AgentError(f"Review node {node.id} has no Coding parent")
+        db_node = await self._state.get_dag_node(coding_node.id)
+        if db_node is None or db_node.branch_name is None:
+            raise AgentError(f"Coding node {coding_node.id} has no branch_name set")
+
+        self._review_counter += 1
+        worktree = await self._worktree_mgr.create_review_worktree(
+            repo_path=self._repo_path,
+            dag_run_id=dag_run.id,
+            node_id=node.id,
+            n=self._review_counter,
+            existing_branch=db_node.branch_name,
+        )
+        self._worktrees[node.id] = worktree
+
+        try:
+            composite = ReviewComposite(
+                settings=self._settings,
+                worktree=worktree,
+                budget=self._budget,
+            )
+            output, cost = await composite.execute(
+                node_context=context,
+                dag_run_id=dag_run.id,
+                node_id=node.id,
+            )
+            return output, cost
+        finally:
+            await self._worktree_mgr.remove_worktree(self._repo_path, worktree.path)
+
+    # ------------------------------------------------------------------
+    # Child DAG recursion (Phase 4)
+    # ------------------------------------------------------------------
+
+    async def _spawn_child_dag(
+        self,
+        parent_dag_run: DAGRun,
+        plan_node: DAGNode,
+        child_dag_spec: ChildDAGSpec,
+        parent_all_nodes: list[DAGNode],
+    ) -> None:
+        """Build and execute a child DAG from a PlanOutput's ChildDAGSpec.
+
+        Enforces the 4-level nesting cap [P1.10].
+        Persists all child DAG nodes before execution [P1.8].
+        """
+        from ..agents.plan import validate_child_dag_spec
+
+        # Validate the spec [P02]
+        try:
+            validate_child_dag_spec(child_dag_spec)
+        except ValueError as exc:
+            raise AgentError(f"Plan agent produced invalid ChildDAGSpec: {exc}") from exc
+
+        # Determine current nesting level
+        current_level = plan_node.level
+        child_level = current_level + 1
+        if child_level > 4:
+            raise ResourceExhaustionError(
+                f"DAG nesting depth limit reached: level {child_level} > 4 [P1.10]"
+            )
+
+        # Build child DAG nodes from the ChildDAGSpec
+        child_nodes = self._build_child_dag_nodes(
+            dag_run=parent_dag_run,
+            spec=child_dag_spec,
+            level=child_level,
+            plan_node_id=plan_node.id,
+        )
+
+        # Persist all child nodes before execution [P1.8]
+        for node in child_nodes:
+            await self._state.create_dag_node(node)
+
+        # Allocate budget for child nodes
+        self._budget.allocate_child([n.id for n in child_nodes])
+
+        # Execute the child DAG (recursive call)
+        child_ordered = topological_sort(child_nodes)
+        for child_node in child_ordered:
+            current_run = await self._state.get_dag_run(parent_dag_run.id)
+            if current_run and current_run.status in (
+                DAGRunStatus.PAUSED,
+                DAGRunStatus.FAILED,
+                DAGRunStatus.ESCALATED,
+            ):
+                break
+
+            if not await self._can_dispatch(child_node, child_nodes):
+                await self._state.update_dag_node_status(child_node.id, NodeStatus.FAILED.value)
+                await self._state.update_dag_run_status(
+                    parent_dag_run.id,
+                    DAGRunStatus.FAILED.value,
+                    error=f"Review gate blocked for child node {child_node.id}",
+                )
+                return
+
+            success = await self._dispatch_node(parent_dag_run, child_node, child_nodes)
+            if not success:
+                return
+
+            await self._drain_and_flush(parent_dag_run.id)
+
+            if self._budget.should_pause():
+                self._budget.record_pause()
+                await self._drain_and_flush(parent_dag_run.id)
+                await self._state.update_dag_run_status(
+                    parent_dag_run.id, DAGRunStatus.PAUSED.value
+                )
+                return
+
+    def _build_child_dag_nodes(
+        self,
+        dag_run: DAGRun,
+        spec: ChildDAGSpec,
+        level: int,
+        plan_node_id: str,
+    ) -> list[DAGNode]:
+        """Build DAGNode list from ChildDAGSpec.
+
+        Structure per P01: for each CompositeSpec, create (Coding, Review) pair.
+        Add terminal Plan node. Apply sequential edges.
+        """
+        now = datetime.now(timezone.utc)
+        run_id = dag_run.id
+        nodes: list[DAGNode] = []
+        coding_ids: dict[str, str] = {}  # composite_id -> coding node id
+        review_ids: dict[str, str] = {}  # composite_id -> review node id
+
+        # Build parent_node_ids lists fully BEFORE constructing DAGNode instances.
+        # Step 1: Collect IDs
+        for comp in spec.composites:
+            coding_id = f"{run_id}-l{level}-coding-{comp.id}"
+            review_id = f"{run_id}-l{level}-review-{comp.id}"
+            coding_ids[comp.id] = coding_id
+            review_ids[comp.id] = review_id
+
+        terminal_plan_id = f"{run_id}-l{level}-plan-terminal"
+        all_review_ids = list(review_ids.values())
+
+        # Step 2: Build coding parent lists (include sequential edges)
+        coding_parents: dict[str, list[str]] = {}
+        for comp in spec.composites:
+            coding_parents[comp.id] = [plan_node_id]
+        for edge in spec.sequential_edges:
+            from_review_id = review_ids[edge.from_composite_id]
+            coding_parents[edge.to_composite_id].append(from_review_id)
+
+        # Step 3: Construct all DAGNode instances with final parent lists
+        for comp in spec.composites:
+            coding_id = coding_ids[comp.id]
+            review_id = review_ids[comp.id]
+
+            coding_node = DAGNode(
+                id=coding_id,
+                dag_run_id=run_id,
+                type=NodeType.CODING,
+                level=level,
+                composite_id=comp.id,
+                parent_node_ids=coding_parents[comp.id],
+                child_node_ids=[review_id],
+                created_at=now,
+                updated_at=now,
+            )
+            nodes.append(coding_node)
+
+            review_node = DAGNode(
+                id=review_id,
+                dag_run_id=run_id,
+                type=NodeType.REVIEW,
+                level=level,
+                composite_id=f"{comp.id}-review",
+                parent_node_ids=[coding_id],
+                child_node_ids=[terminal_plan_id],
+                created_at=now,
+                updated_at=now,
+            )
+            nodes.append(review_node)
+
+        # Terminal Plan node — depends on all Review nodes
+        terminal_plan = DAGNode(
+            id=terminal_plan_id,
+            dag_run_id=run_id,
+            type=NodeType.PLAN,
+            level=level,
+            composite_id=f"L{level}-terminal",
+            parent_node_ids=all_review_ids,
+            child_node_ids=[],
+            created_at=now,
+            updated_at=now,
+        )
+        nodes.append(terminal_plan)
+
+        return nodes
 
     # ------------------------------------------------------------------
     # Escalation

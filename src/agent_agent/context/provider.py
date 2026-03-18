@@ -13,6 +13,7 @@ SharedContextView cap behaviour:
   - otherwise → truncation-only stub (Tiers 2+3 masking/summarization deferred to Phase 6)
     Sort DiscoveryRecords newest-first, accumulate byte sizes, drop records that exceed limit.
 """
+
 from __future__ import annotations
 
 import json
@@ -58,9 +59,7 @@ class ContextProvider:
     def shared_context(self) -> SharedContext:
         return self._shared
 
-    async def build_context(
-        self, node: DAGNode, all_nodes: list[DAGNode]
-    ) -> NodeContext:
+    async def build_context(self, node: DAGNode, all_nodes: list[DAGNode]) -> NodeContext:
         """Assemble NodeContext for a node at dispatch time."""
         # 1. Parent outputs — from all immediate predecessors in the state store
         parent_outputs = {}

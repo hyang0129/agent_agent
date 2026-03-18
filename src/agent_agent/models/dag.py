@@ -1,4 +1,5 @@
 """DAG run and node models, plus NodeResult / ExecutionMeta."""
+
 from __future__ import annotations
 
 from datetime import datetime
@@ -15,7 +16,7 @@ class DAGRunStatus(str, Enum):
     COMPLETED = "completed"
     FAILED = "failed"
     ESCALATED = "escalated"
-    PAUSED = "paused"     # budget threshold reached; resumes on human increase [P7]
+    PAUSED = "paused"  # budget threshold reached; resumes on human increase [P7]
 
 
 class NodeStatus(str, Enum):
@@ -23,7 +24,7 @@ class NodeStatus(str, Enum):
     RUNNING = "running"
     COMPLETED = "completed"
     FAILED = "failed"
-    SKIPPED = "skipped"   # not dispatched because DAG was paused [P7]
+    SKIPPED = "skipped"  # not dispatched because DAG was paused [P7]
 
 
 class NodeType(str, Enum):
@@ -51,7 +52,7 @@ class DAGNode(BaseModel):
     type: NodeType
     status: NodeStatus = NodeStatus.PENDING
     level: int
-    composite_id: str          # matches CompositeSpec.id (e.g. "A", "B")
+    composite_id: str  # matches CompositeSpec.id (e.g. "A", "B")
     parent_node_ids: list[str] = []
     child_node_ids: list[str] = []
     worktree_path: str | None = None

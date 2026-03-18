@@ -3,6 +3,7 @@
 All persistent state lives here; agents and composites are stateless.
 Uses aiosqlite. One database per environment (data/dev.db, data/prod.db, :memory: for test).
 """
+
 from __future__ import annotations
 
 import json
@@ -132,18 +133,23 @@ class StateStore:
                (id, issue_url, repo_path, status, budget_usd, usd_used,
                 created_at, updated_at, completed_at, error)
                VALUES (?,?,?,?,?,?,?,?,?,?)""",
-            (run.id, run.issue_url, run.repo_path, run.status.value,
-             run.budget_usd, run.usd_used,
-             run.created_at.isoformat(), run.updated_at.isoformat(),
-             run.completed_at.isoformat() if run.completed_at else None,
-             run.error),
+            (
+                run.id,
+                run.issue_url,
+                run.repo_path,
+                run.status.value,
+                run.budget_usd,
+                run.usd_used,
+                run.created_at.isoformat(),
+                run.updated_at.isoformat(),
+                run.completed_at.isoformat() if run.completed_at else None,
+                run.error,
+            ),
         )
         await self._db.commit()
 
     async def get_dag_run(self, run_id: str) -> DAGRun | None:
-        async with self._db.execute(
-            "SELECT * FROM dag_runs WHERE id=?", (run_id,)
-        ) as cur:
+        async with self._db.execute("SELECT * FROM dag_runs WHERE id=?", (run_id,)) as cur:
             row = await cur.fetchone()
         if row is None:
             return None
@@ -178,19 +184,26 @@ class StateStore:
                 parent_node_ids, child_node_ids, worktree_path, branch_name,
                 created_at, updated_at, completed_at)
                VALUES (?,?,?,?,?,?,?,?,?,?,?,?,?)""",
-            (node.id, node.dag_run_id, node.type.value, node.status.value,
-             node.level, node.composite_id,
-             json.dumps(node.parent_node_ids), json.dumps(node.child_node_ids),
-             node.worktree_path, node.branch_name,
-             node.created_at.isoformat(), node.updated_at.isoformat(),
-             node.completed_at.isoformat() if node.completed_at else None),
+            (
+                node.id,
+                node.dag_run_id,
+                node.type.value,
+                node.status.value,
+                node.level,
+                node.composite_id,
+                json.dumps(node.parent_node_ids),
+                json.dumps(node.child_node_ids),
+                node.worktree_path,
+                node.branch_name,
+                node.created_at.isoformat(),
+                node.updated_at.isoformat(),
+                node.completed_at.isoformat() if node.completed_at else None,
+            ),
         )
         await self._db.commit()
 
     async def get_dag_node(self, node_id: str) -> DAGNode | None:
-        async with self._db.execute(
-            "SELECT * FROM dag_nodes WHERE id=?", (node_id,)
-        ) as cur:
+        async with self._db.execute("SELECT * FROM dag_nodes WHERE id=?", (node_id,)) as cur:
             row = await cur.fetchone()
         if row is None:
             return None
@@ -212,6 +225,17 @@ class StateStore:
             d["child_node_ids"] = json.loads(d["child_node_ids"])
             nodes.append(DAGNode.model_validate(d))
         return nodes
+
+    async def update_dag_node_worktree(
+        self, node_id: str, worktree_path: str, branch_name: str | None
+    ) -> None:
+        """Update a DAG node with its assigned worktree path and branch."""
+        await self._db.execute(
+            """UPDATE dag_nodes SET worktree_path=?, branch_name=?, updated_at=?
+               WHERE id=?""",
+            (worktree_path, branch_name, _now(), node_id),
+        )
+        await self._db.commit()
 
     async def update_dag_node_status(
         self,
@@ -239,9 +263,12 @@ class StateStore:
         await self._db.execute(
             """INSERT OR REPLACE INTO node_results (node_id, dag_run_id, output, meta)
                VALUES (?,?,?,?)""",
-            (result.node_id, result.dag_run_id,
-             result.output.model_dump_json(),
-             result.meta.model_dump_json()),
+            (
+                result.node_id,
+                result.dag_run_id,
+                result.output.model_dump_json(),
+                result.meta.model_dump_json(),
+            ),
         )
         await self._db.commit()
 
@@ -255,6 +282,7 @@ class StateStore:
         from pydantic import TypeAdapter
         from .models.dag import ExecutionMeta
         from .models.agent import AgentOutput
+
         _output_adapter: TypeAdapter = TypeAdapter(AgentOutput)  # type: ignore[type-arg]
         d = dict(row)
         return NodeResult(
@@ -280,8 +308,7 @@ class StateStore:
             """INSERT INTO shared_context
                (id, dag_run_id, source_node_id, category, data, timestamp)
                VALUES (?,?,?,?,?,?)""",
-            (entry_id, dag_run_id, source_node_id, category,
-             json.dumps(data), _now()),
+            (entry_id, dag_run_id, source_node_id, category, json.dumps(data), _now()),
         )
         await self._db.commit()
 
@@ -303,9 +330,16 @@ class StateStore:
                (id, dag_run_id, node_id, event_type,
                 usd_before, usd_after, reason, timestamp)
                VALUES (?,?,?,?,?,?,?,?)""",
-            (event.id, event.dag_run_id, event.node_id, event.event_type.value,
-             event.usd_before, event.usd_after, event.reason,
-             event.timestamp.isoformat()),
+            (
+                event.id,
+                event.dag_run_id,
+                event.node_id,
+                event.event_type.value,
+                event.usd_before,
+                event.usd_after,
+                event.reason,
+                event.timestamp.isoformat(),
+            ),
         )
         await self._db.commit()
 
@@ -327,11 +361,18 @@ class StateStore:
                (id, dag_run_id, node_id, severity, trigger,
                 message, status, resolution, created_at, resolved_at)
                VALUES (?,?,?,?,?,?,?,?,?,?)""",
-            (record.id, record.dag_run_id, record.node_id,
-             record.severity.value, record.trigger, record.message,
-             record.status.value, record.resolution,
-             record.created_at.isoformat(),
-             record.resolved_at.isoformat() if record.resolved_at else None),
+            (
+                record.id,
+                record.dag_run_id,
+                record.node_id,
+                record.severity.value,
+                record.trigger,
+                record.message,
+                record.status.value,
+                record.resolution,
+                record.created_at.isoformat(),
+                record.resolved_at.isoformat() if record.resolved_at else None,
+            ),
         )
         await self._db.commit()
 

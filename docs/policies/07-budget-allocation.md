@@ -49,9 +49,9 @@ When the 5% threshold is reached, the executor sets `DAGRunStatus.PAUSED` and st
 - [P7.6] fires next: at 5% remaining, pause and escalate.
 - [P6.1b] fires last: escalate to human for disposition (budget increase, resume, or close).
 
-### P7.7 Every API call sets `max_tokens` to the model's maximum
+### P7.7 Budget enforcement uses `max_budget_usd`, not `max_tokens`
 
-Nodes always run to completion. `max_tokens` is set to the model's maximum on every call — not the node's remaining allocation. The budget allocation per node informs scheduling decisions and post-run analysis but does not constrain individual API calls.
+Nodes always run to completion. Budget enforcement is USD-denominated via `max_budget_usd` on each SDK invocation — `max_tokens` is not set or constrained per request. The SDK's cost tracking (`ResultMessage.total_cost_usd`) is the authoritative budget consumption signal. The budget allocation per node informs scheduling decisions and post-run analysis but does not constrain individual API calls at the token level.
 
 ### P7.8 All allocation and freeze events are logged as structured budget events
 
@@ -80,7 +80,7 @@ When a DAG run is stopped due to budget exhaustion, a separate post-mortem proce
 
 - The orchestrator increasing the budget autonomously without human approval.
 - Interrupting or killing an active node mid-execution for any budget reason.
-- Setting `max_tokens` to anything less than the model's maximum.
+- Constraining individual API calls via `max_tokens` instead of using `max_budget_usd` for enforcement.
 - Discarding or skipping pending nodes at the 5% threshold instead of leaving them in `PENDING` for resumption [P7.6].
 - Not logging allocation or increase events as `BudgetEvent` records.
 
@@ -92,6 +92,6 @@ When a DAG run is stopped due to budget exhaustion, a separate post-mortem proce
 | Composite node allocation | Parent subdivides | Local strategy per composite |
 | Active node interruption | Never | Always run to completion; freeze at node boundary [P7.4] |
 | 5% threshold action | Pause run, leave pending nodes PENDING, escalate [P7.6] | Stage-aware continuation is preferred but optional |
-| `max_tokens` per request | Model maximum | Nodes always run to completion [P7.7] |
+| Budget enforcement | `max_budget_usd` per invocation | USD-denominated; no `max_tokens` constraint [P7.7] |
 | Budget event logging | All events including increases | Required for weight tuning [P7.8] |
 | Post-mortem | Beyond MVP | Design for it now [P7.9] |

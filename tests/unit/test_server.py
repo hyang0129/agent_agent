@@ -5,6 +5,7 @@ Tests:
   - Unknown dag_run_id → 404
   - Response shape matches L1 contract (no L2 metrics fields)
 """
+
 from __future__ import annotations
 
 from datetime import datetime, timezone
@@ -78,9 +79,7 @@ async def sample_run(state_store: StateStore) -> DAGRun:
 
 
 class TestDAGStatusEndpoint:
-    async def test_valid_run_returns_status(
-        self, client: AsyncClient, sample_run: DAGRun
-    ) -> None:
+    async def test_valid_run_returns_status(self, client: AsyncClient, sample_run: DAGRun) -> None:
         resp = await client.get(f"/dags/{sample_run.id}/status")
         assert resp.status_code == 200
 

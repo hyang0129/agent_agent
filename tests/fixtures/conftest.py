@@ -7,6 +7,7 @@ github_test_repo: session-scoped fixture that creates a real GitHub repo + issue
 target_repo / repo_with_remote: local-only fixtures (no GITHUB_TOKEN needed).
   Defined in tests/component/conftest.py.
 """
+
 from __future__ import annotations
 
 import os
@@ -39,20 +40,26 @@ def github_test_repo() -> tuple[str, int]:
     # Create repo
     repo_name = f"agent-agent-test-{uuid.uuid4().hex[:8]}"
     with httpx.Client(base_url="https://api.github.com", headers=headers) as client:
-        resp = client.post("/user/repos", json={
-            "name": repo_name,
-            "auto_init": True,
-            "private": True,
-        })
+        resp = client.post(
+            "/user/repos",
+            json={
+                "name": repo_name,
+                "auto_init": True,
+                "private": True,
+            },
+        )
         resp.raise_for_status()
         full_name = resp.json()["full_name"]
 
         # Create issue
         owner, repo = full_name.split("/")
-        resp = client.post(f"/repos/{full_name}/issues", json={
-            "title": "Test issue for agent-agent",
-            "body": "This is a test issue created by the agent-agent test suite.",
-        })
+        resp = client.post(
+            f"/repos/{full_name}/issues",
+            json={
+                "title": "Test issue for agent-agent",
+                "body": "This is a test issue created by the agent-agent test suite.",
+            },
+        )
         resp.raise_for_status()
         issue_number = resp.json()["number"]
 

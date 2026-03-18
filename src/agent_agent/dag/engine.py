@@ -15,6 +15,7 @@ Child DAG spawning (Phase 4):  when the terminal Plan outputs a non-null
 child_dag, the executor constructs a new child DAGRun.  Phase 2 stub raises
 NotImplementedError in that case.
 """
+
 from __future__ import annotations
 
 from collections import defaultdict, deque
@@ -90,7 +91,7 @@ def build_stub_dag(dag_run: DAGRun) -> list[DAGNode]:
         level=1,
         composite_id="L1-terminal",
         parent_node_ids=[l1_review_id],
-        child_node_ids=[],   # no successors — terminal node
+        child_node_ids=[],  # no successors — terminal node
         created_at=now,
         updated_at=now,
     )

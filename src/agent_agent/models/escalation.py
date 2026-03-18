@@ -1,4 +1,5 @@
 """Escalation models.  [P6]"""
+
 from __future__ import annotations
 
 from datetime import datetime
@@ -8,9 +9,9 @@ from pydantic import BaseModel
 
 
 class EscalationSeverity(str, Enum):
-    CRITICAL = "CRITICAL"   # safety violation — halt immediately, no retry
-    HIGH = "HIGH"           # semantic anomaly, deterministic error, depth limit
-    MEDIUM = "MEDIUM"       # retry exhaustion, budget exhaustion
+    CRITICAL = "CRITICAL"  # safety violation — halt immediately, no retry
+    HIGH = "HIGH"  # semantic anomaly, deterministic error, depth limit
+    MEDIUM = "MEDIUM"  # retry exhaustion, budget exhaustion
 
 
 class EscalationStatus(str, Enum):
@@ -24,7 +25,7 @@ class EscalationRecord(BaseModel):
     node_id: str | None
     severity: EscalationSeverity
     trigger: str
-    message: str          # structured JSON string: attempt history, DAG impact, budget state
+    message: str  # structured JSON string: attempt history, DAG impact, budget state
     status: EscalationStatus = EscalationStatus.OPEN
     resolution: str | None = None
     created_at: datetime

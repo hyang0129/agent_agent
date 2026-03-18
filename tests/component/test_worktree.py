@@ -1,4 +1,5 @@
 """Component tests for WorktreeManager — real git operations against tmp_git_repo."""
+
 from __future__ import annotations
 
 from pathlib import Path
@@ -13,6 +14,7 @@ WORKTREE_BASE = "/workspaces/.agent_agent_tests/worktrees"
 # ---------------------------------------------------------------------------
 # from_settings guard
 # ---------------------------------------------------------------------------
+
 
 def test_from_settings_raises_if_base_dir_none() -> None:
     with pytest.raises(WorktreeMisconfiguredError):
@@ -32,6 +34,7 @@ def test_from_settings_returns_manager() -> None:
 # ---------------------------------------------------------------------------
 # Coding worktree
 # ---------------------------------------------------------------------------
+
 
 async def test_create_coding_worktree(tmp_git_repo: Path) -> None:
     mgr = WorktreeManager(WORKTREE_BASE)
@@ -81,6 +84,7 @@ async def test_coding_worktree_path_under_base_dir(tmp_git_repo: Path) -> None:
 async def test_coding_worktree_branch_is_new(tmp_git_repo: Path) -> None:
     """The coding worktree must create a new branch, not check out an existing one."""
     import subprocess
+
     mgr = WorktreeManager(WORKTREE_BASE)
     rec = await mgr.create_coding_worktree(
         repo_path=str(tmp_git_repo),
@@ -91,7 +95,9 @@ async def test_coding_worktree_branch_is_new(tmp_git_repo: Path) -> None:
     try:
         result = subprocess.run(
             ["git", "branch", "--list", rec.branch],
-            cwd=str(tmp_git_repo), capture_output=True, text=True,
+            cwd=str(tmp_git_repo),
+            capture_output=True,
+            text=True,
         )
         assert rec.branch in result.stdout
     finally:
@@ -101,6 +107,7 @@ async def test_coding_worktree_branch_is_new(tmp_git_repo: Path) -> None:
 # ---------------------------------------------------------------------------
 # Review worktree
 # ---------------------------------------------------------------------------
+
 
 async def test_create_review_worktree(tmp_git_repo: Path) -> None:
     """Review worktree must check out an existing branch, readonly=True.
@@ -141,7 +148,10 @@ async def test_create_review_worktree(tmp_git_repo: Path) -> None:
 async def test_review_worktree_readonly_flag_stored(tmp_git_repo: Path) -> None:
     mgr = WorktreeManager(WORKTREE_BASE)
     coding_rec = await mgr.create_coding_worktree(
-        repo_path=str(tmp_git_repo), dag_run_id="run-flag", node_id="nc", n=3,
+        repo_path=str(tmp_git_repo),
+        dag_run_id="run-flag",
+        node_id="nc",
+        n=3,
     )
     assert coding_rec.readonly is False
 
@@ -149,7 +159,10 @@ async def test_review_worktree_readonly_flag_stored(tmp_git_repo: Path) -> None:
     await mgr.remove_worktree(str(tmp_git_repo), coding_rec.path)
 
     review_rec = await mgr.create_review_worktree(
-        repo_path=str(tmp_git_repo), dag_run_id="run-flag", node_id="nr", n=3,
+        repo_path=str(tmp_git_repo),
+        dag_run_id="run-flag",
+        node_id="nr",
+        n=3,
         existing_branch=coding_rec.branch,
     )
     try:
@@ -162,10 +175,14 @@ async def test_review_worktree_readonly_flag_stored(tmp_git_repo: Path) -> None:
 # Remove worktree
 # ---------------------------------------------------------------------------
 
+
 async def test_remove_worktree(tmp_git_repo: Path) -> None:
     mgr = WorktreeManager(WORKTREE_BASE)
     rec = await mgr.create_coding_worktree(
-        repo_path=str(tmp_git_repo), dag_run_id="run-remove", node_id="n", n=1,
+        repo_path=str(tmp_git_repo),
+        dag_run_id="run-remove",
+        node_id="n",
+        n=1,
     )
     assert Path(rec.path).is_dir()
 
@@ -178,14 +195,21 @@ async def test_remove_worktree(tmp_git_repo: Path) -> None:
 # Branch isolation
 # ---------------------------------------------------------------------------
 
+
 async def test_worktrees_have_independent_branches(tmp_git_repo: Path) -> None:
     """Two coding worktrees for the same run must be on different branches."""
     mgr = WorktreeManager(WORKTREE_BASE)
     rec1 = await mgr.create_coding_worktree(
-        repo_path=str(tmp_git_repo), dag_run_id="run-iso", node_id="n1", n=1,
+        repo_path=str(tmp_git_repo),
+        dag_run_id="run-iso",
+        node_id="n1",
+        n=1,
     )
     rec2 = await mgr.create_coding_worktree(
-        repo_path=str(tmp_git_repo), dag_run_id="run-iso", node_id="n2", n=2,
+        repo_path=str(tmp_git_repo),
+        dag_run_id="run-iso",
+        node_id="n2",
+        n=2,
     )
     try:
         assert rec1.branch != rec2.branch

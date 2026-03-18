@@ -6,6 +6,7 @@ Sets AGENT_AGENT_WORKTREE_BASE_DIR so WorktreeManager calls land at
 
 github_test_repo: session-scoped fixture for live GitHub API tests (requires GITHUB_TOKEN).
 """
+
 from __future__ import annotations
 
 import os
@@ -15,8 +16,15 @@ from pathlib import Path
 
 import pytest
 
+from agent_agent.config import Settings, configure_logging
+
 
 WORKTREE_BASE = "/workspaces/.agent_agent_tests/worktrees"
+
+
+def pytest_configure(config: pytest.Config) -> None:
+    """Configure structlog for component tests so tool call events are visible."""
+    configure_logging(Settings(env="test", log_level="DEBUG", log_format="console"))
 
 
 @pytest.fixture(autouse=True)
@@ -34,8 +42,13 @@ def tmp_git_repo(tmp_path: Path) -> Path:
     repo = tmp_path / "repo"
     repo.mkdir()
 
-    env = {**os.environ, "GIT_AUTHOR_NAME": "Test", "GIT_AUTHOR_EMAIL": "t@t.com",
-           "GIT_COMMITTER_NAME": "Test", "GIT_COMMITTER_EMAIL": "t@t.com"}
+    env = {
+        **os.environ,
+        "GIT_AUTHOR_NAME": "Test",
+        "GIT_AUTHOR_EMAIL": "t@t.com",
+        "GIT_COMMITTER_NAME": "Test",
+        "GIT_COMMITTER_EMAIL": "t@t.com",
+    }
 
     def git(*args: str) -> None:
         subprocess.run(["git", *args], cwd=repo, check=True, capture_output=True, env=env)
@@ -43,8 +56,30 @@ def tmp_git_repo(tmp_path: Path) -> Path:
     git("init", "-b", "main")
     git("config", "user.email", "t@t.com")
     git("config", "user.name", "Test")
-    (repo / "README.md").write_text("# test repo\n")
-    git("add", "README.md")
+
+    # Minimal but runnable Python project so agents have real structure to work with
+    # and the Test Executor can run `pytest` and get a clean result.
+    (repo / "README.md").write_text(
+        "# test-repo\n\nA minimal Python project used in agent_agent component tests.\n"
+    )
+    (repo / "pyproject.toml").write_text(
+        "[tool.pytest.ini_options]\ntestpaths = [\"tests\"]\npythonpath = [\".\"]\n"
+    )
+    (repo / "main.py").write_text(
+        "def hello(name: str) -> str:\n"
+        "    \"\"\"Return a greeting string.\"\"\"\n"
+        "    return f\"Hello, {name}!\"\n"
+    )
+    tests_dir = repo / "tests"
+    tests_dir.mkdir()
+    (tests_dir / "__init__.py").write_text("")
+    (tests_dir / "test_main.py").write_text(
+        "from main import hello\n\n\n"
+        "def test_hello_returns_greeting() -> None:\n"
+        "    assert hello(\"World\") == \"Hello, World!\"\n"
+    )
+
+    git("add", ".")
     git("commit", "-m", "initial commit")
 
     return repo
@@ -80,18 +115,24 @@ def github_test_repo() -> tuple[str, int]:
 
     repo_name = f"agent-agent-test-{uuid.uuid4().hex[:8]}"
     with httpx.Client(base_url="https://api.github.com", headers=headers) as client:
-        resp = client.post("/user/repos", json={
-            "name": repo_name,
-            "auto_init": True,
-            "private": True,
-        })
+        resp = client.post(
+            "/user/repos",
+            json={
+                "name": repo_name,
+                "auto_init": True,
+                "private": True,
+            },
+        )
         resp.raise_for_status()
         full_name = resp.json()["full_name"]
 
-        resp = client.post(f"/repos/{full_name}/issues", json={
-            "title": "Test issue for agent-agent",
-            "body": "This is a test issue created by the agent-agent test suite.",
-        })
+        resp = client.post(
+            f"/repos/{full_name}/issues",
+            json={
+                "title": "Test issue for agent-agent",
+                "body": "This is a test issue created by the agent-agent test suite.",
+            },
+        )
         resp.raise_for_status()
         issue_number = resp.json()["number"]
 

@@ -1,4 +1,5 @@
 """Tests for the SQLite state store — CRUD round-trips against :memory:."""
+
 from __future__ import annotations
 
 import uuid
@@ -63,6 +64,7 @@ async def store() -> StateStore:
 # dag_runs
 # ---------------------------------------------------------------------------
 
+
 class TestDAGRuns:
     @pytest.mark.asyncio
     async def test_create_and_get(self, store: StateStore):
@@ -99,6 +101,7 @@ class TestDAGRuns:
 # ---------------------------------------------------------------------------
 # dag_nodes
 # ---------------------------------------------------------------------------
+
 
 class TestDAGNodes:
     @pytest.mark.asyncio
@@ -143,6 +146,7 @@ class TestDAGNodes:
 # node_results
 # ---------------------------------------------------------------------------
 
+
 class TestNodeResults:
     @pytest.mark.asyncio
     async def test_save_and_get(self, store: StateStore):
@@ -176,13 +180,17 @@ class TestNodeResults:
 # shared_context  (append-only)
 # ---------------------------------------------------------------------------
 
+
 class TestSharedContext:
     @pytest.mark.asyncio
     async def test_append_and_list(self, store: StateStore):
         await store.create_dag_run(_run())
         await store.append_shared_context(
-            str(uuid.uuid4()), "run-1", "node-1", "file_mapping",
-            {"path": "src/auth.py", "description": "token validation"}
+            str(uuid.uuid4()),
+            "run-1",
+            "node-1",
+            "file_mapping",
+            {"path": "src/auth.py", "description": "token validation"},
         )
         entries = await store.list_shared_context("run-1")
         assert len(entries) == 1
@@ -202,6 +210,7 @@ class TestSharedContext:
 # ---------------------------------------------------------------------------
 # budget_events
 # ---------------------------------------------------------------------------
+
 
 class TestBudgetEvents:
     @pytest.mark.asyncio
@@ -227,6 +236,7 @@ class TestBudgetEvents:
 # escalations
 # ---------------------------------------------------------------------------
 
+
 class TestEscalations:
     @pytest.mark.asyncio
     async def test_create_and_get(self, store: StateStore):
@@ -249,14 +259,16 @@ class TestEscalations:
     async def test_list_escalations(self, store: StateStore):
         await store.create_dag_run(_run())
         for _ in range(2):
-            await store.create_escalation(EscalationRecord(
-                id=str(uuid.uuid4()),
-                dag_run_id="run-1",
-                node_id=None,
-                severity=EscalationSeverity.MEDIUM,
-                trigger="budget exhausted",
-                message="{}",
-                created_at=_now(),
-            ))
+            await store.create_escalation(
+                EscalationRecord(
+                    id=str(uuid.uuid4()),
+                    dag_run_id="run-1",
+                    node_id=None,
+                    severity=EscalationSeverity.MEDIUM,
+                    trigger="budget exhausted",
+                    message="{}",
+                    created_at=_now(),
+                )
+            )
         records = await store.list_escalations("run-1")
         assert len(records) == 2

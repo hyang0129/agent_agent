@@ -10,6 +10,7 @@ Branch protection check:
   - raises NotImplementedError in Phase 3 — no write operations exist yet
     to exercise it; real implementation wired in Phase 4
 """
+
 from __future__ import annotations
 
 import os

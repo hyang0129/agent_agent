@@ -12,6 +12,7 @@ Rules per implementation plan:
   filesystem permissions — WorktreeManager creates both identically
 - readonly=True flag stored on WorktreeRecord for Phase 4 use
 """
+
 from __future__ import annotations
 
 import asyncio

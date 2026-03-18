@@ -10,9 +10,11 @@ Lifecycle:
   5. Hands off to executor (stub agents in Phase 3)
   6. Returns (CodeOutput.branch_name, ReviewOutput.summary)
 """
+
 from __future__ import annotations
 
 import asyncio
+import subprocess
 import uuid
 from datetime import datetime, timezone
 
@@ -89,19 +91,38 @@ class Orchestrator:
         state_store: StateStore,
         *,
         agent_fn: AgentFn | None = None,
+        use_composites: bool = False,
     ) -> None:
         self._settings = settings
         self._repo_path = repo_path
         self._claude_md = claude_md_content
         self._issue_url = issue_url
         self._state = state_store
-        self._agent_fn = agent_fn or _stub_agent_fn()
+        # use_composites=True: executor uses real SDK composite dispatch (Phase 4).
+        # use_composites=False (default): uses agent_fn or stub for backward compat.
+        self._use_composites = use_composites
+        if use_composites:
+            self._agent_fn: AgentFn | None = None
+        else:
+            self._agent_fn = agent_fn or _stub_agent_fn()
 
     async def run(self) -> tuple[str, str]:
         """Execute the full run lifecycle.
 
         Returns (branch_name, summary) from the stub/real agent outputs.
         """
+        # 0. Prune orphaned worktrees from prior crashed runs (non-fatal)
+        try:
+            await asyncio.to_thread(
+                subprocess.run,
+                ["git", "worktree", "prune"],
+                cwd=self._repo_path,
+                capture_output=True,
+                check=False,
+            )
+        except Exception:
+            _logger.debug("orchestrator.worktree_prune_skipped", repo_path=self._repo_path)
+
         run_id = str(uuid.uuid4())
         now = datetime.now(timezone.utc)
 
@@ -143,12 +164,30 @@ class Orchestrator:
             state=self._state,
             settings=self._settings,
         )
+
+        # When using real composites (Phase 4), create WorktreeManager
+        # for Coding/Review composite worktree lifecycle.
+        worktree_mgr = None
+        if self._use_composites:
+            from .worktree import WorktreeManager
+
+            if self._settings.worktree_base_dir is None:
+                raise ValueError(
+                    "worktree_base_dir must be set in settings when use_composites=True"
+                )
+            worktree_mgr = WorktreeManager(
+                base_dir=self._settings.worktree_base_dir,
+            )
+
         executor = DAGExecutor(
             state=self._state,
             budget=budget,
             context_provider=ctx_provider,
             agent_fn=self._agent_fn,
             settings=self._settings,
+            worktree_manager=worktree_mgr,
+            repo_path=self._repo_path,
+            issue_number=self._extract_issue_number(),
         )
 
         # 6. Inject state store into the FastAPI app for the server endpoint
@@ -188,9 +227,15 @@ class Orchestrator:
         asyncio.get_event_loop().create_task(server.serve())
         return server
 
-    async def _extract_results(
-        self, run_id: str, nodes: list[DAGNode]
-    ) -> tuple[str, str]:
+    def _extract_issue_number(self) -> str:
+        """Extract issue number from the issue URL."""
+        # https://github.com/owner/repo/issues/123 -> "123"
+        parts = self._issue_url.rstrip("/").split("/")
+        if parts and parts[-1].isdigit():
+            return parts[-1]
+        return "0"
+
+    async def _extract_results(self, run_id: str, nodes: list[DAGNode]) -> tuple[str, str]:
         """Extract branch_name from CodeOutput and summary from ReviewOutput."""
         branch_name = ""
         summary = ""

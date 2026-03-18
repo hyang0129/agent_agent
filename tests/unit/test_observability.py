@@ -1,4 +1,5 @@
 """Unit tests for observability.py — emit_event, EventType, level registry."""
+
 from __future__ import annotations
 
 import sys
@@ -14,29 +15,45 @@ from agent_agent.observability import EventType, _LEVEL_REGISTRY, emit_event
 # Level registry
 # ---------------------------------------------------------------------------
 
+
 def test_all_event_types_have_levels() -> None:
     for et in EventType:
         assert et in _LEVEL_REGISTRY, f"{et} missing from _LEVEL_REGISTRY"
 
 
 def test_l1_events() -> None:
-    l1 = [EventType.DAG_STARTED, EventType.DAG_COMPLETED, EventType.DAG_FAILED,
-          EventType.DAG_PAUSED, EventType.NODE_STARTED, EventType.NODE_COMPLETED,
-          EventType.NODE_FAILED, EventType.ESCALATION_TRIGGERED]
+    l1 = [
+        EventType.DAG_STARTED,
+        EventType.DAG_COMPLETED,
+        EventType.DAG_FAILED,
+        EventType.DAG_PAUSED,
+        EventType.NODE_STARTED,
+        EventType.NODE_COMPLETED,
+        EventType.NODE_FAILED,
+        EventType.ESCALATION_TRIGGERED,
+    ]
     for et in l1:
         assert _LEVEL_REGISTRY[et] == 1, f"{et} should be L1"
 
 
 def test_l2_events() -> None:
-    l2 = [EventType.NODE_RETRYING, EventType.BUDGET_USAGE,
-          EventType.BUDGET_PAUSED, EventType.CONTEXT_TRUNCATED]
+    l2 = [
+        EventType.NODE_RETRYING,
+        EventType.BUDGET_USAGE,
+        EventType.BUDGET_PAUSED,
+        EventType.CONTEXT_TRUNCATED,
+    ]
     for et in l2:
         assert _LEVEL_REGISTRY[et] == 2, f"{et} should be L2"
 
 
 def test_l3_events() -> None:
-    l3 = [EventType.TOOL_CALLED, EventType.TOOL_DENIED,
-          EventType.LLM_REQUEST, EventType.LLM_RESPONSE]
+    l3 = [
+        EventType.TOOL_CALLED,
+        EventType.TOOL_DENIED,
+        EventType.LLM_REQUEST,
+        EventType.LLM_RESPONSE,
+    ]
     for et in l3:
         assert _LEVEL_REGISTRY[et] == 3, f"{et} should be L3"
 
@@ -44,6 +61,7 @@ def test_l3_events() -> None:
 # ---------------------------------------------------------------------------
 # emit_event writes structlog record
 # ---------------------------------------------------------------------------
+
 
 def test_emit_event_calls_structlog() -> None:
     """emit_event must produce a structlog record with dag_run_id and node_id."""
@@ -121,6 +139,7 @@ def test_emit_event_level_for_tool_called() -> None:
 # ---------------------------------------------------------------------------
 # Non-fatal behaviour
 # ---------------------------------------------------------------------------
+
 
 def test_emit_event_does_not_raise_on_logger_error() -> None:
     """emit_event must never raise — structlog errors go to stderr."""

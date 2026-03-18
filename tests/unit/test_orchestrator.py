@@ -4,6 +4,7 @@ Tests:
   - DAGRun record created in SQLite BEFORE emit_event(DAG_STARTED) fires
   - orchestrator.run() returns (branch_name, summary) from stub agent outputs
 """
+
 from __future__ import annotations
 
 import os
@@ -75,6 +76,7 @@ class TestOrchestrator:
 
         def tracking_emit(event_type, dag_run_id, **kwargs):  # type: ignore[no-untyped-def]
             from agent_agent.observability import EventType
+
             if event_type == EventType.DAG_STARTED:
                 call_log.append("emit_dag_started")
 
