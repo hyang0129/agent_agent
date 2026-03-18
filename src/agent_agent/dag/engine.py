@@ -99,6 +99,35 @@ def build_stub_dag(dag_run: DAGRun) -> list[DAGNode]:
     return [l0_plan, l1_coding, l1_review, l1_plan]
 
 
+def build_l0_dag(dag_run: DAGRun) -> list[DAGNode]:
+    """Build a single-node L0 DAG for composite execution mode.
+
+    When use_composites=True, the L0 Plan composite's PlanOutput.child_dag
+    drives _spawn_child_dag(), which builds L1 nodes dynamically at runtime.
+    Pre-building L1 stub nodes causes duplicate dispatch when _spawn_child_dag
+    returns, so only the L0 Plan node is pre-built.
+    """
+    now = datetime.now(timezone.utc)
+    run_id = dag_run.id
+
+    l0_plan = DAGNode(
+        id=f"{run_id}-l0-plan",
+        dag_run_id=run_id,
+        type=NodeType.PLAN,
+        status=NodeStatus.PENDING,
+        level=0,
+        composite_id="L0",
+        parent_node_ids=[],
+        # child_node_ids is intentionally empty: in composite mode, L1 nodes are built
+        # dynamically by _spawn_child_dag() from the Plan composite's ChildDAGSpec.
+        # Pre-building child edges would cause duplicate dispatch.
+        child_node_ids=[],
+        created_at=now,
+        updated_at=now,
+    )
+    return [l0_plan]
+
+
 def topological_sort(nodes: list[DAGNode]) -> list[DAGNode]:
     """Return nodes in topological order (all dependencies before dependents).
 

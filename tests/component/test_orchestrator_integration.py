@@ -23,7 +23,9 @@ import pytest
 from agent_agent.config import Settings
 from agent_agent.dag.executor import AgentFn
 from agent_agent.models.agent import (
+    ChildDAGSpec,
     CodeOutput,
+    CompositeSpec,
     PlanOutput,
     ReviewOutput,
     ReviewVerdict,
@@ -330,8 +332,24 @@ class TestOrchestratorLifecycle:
         mock_wm.remove_worktree = AsyncMock(return_value=None)
 
         # Canned composite outputs
-        plan_output = PlanOutput(
+        # L0 plan returns a child_dag so _spawn_child_dag() builds L1 nodes
+        l0_plan_output = PlanOutput(
             investigation_summary="Composite plan stub",
+            child_dag=ChildDAGSpec(
+                composites=[
+                    CompositeSpec(
+                        id="A",
+                        scope="implement the feature",
+                        branch_suffix="test10d-code-1",
+                    )
+                ],
+                sequential_edges=[],
+            ),
+            discoveries=[],
+        )
+        # Terminal plan (L1) returns child_dag=None — work complete
+        terminal_plan_output = PlanOutput(
+            investigation_summary="Terminal plan stub",
             child_dag=None,
             discoveries=[],
         )
@@ -357,6 +375,15 @@ class TestOrchestratorLifecycle:
                 wm_instantiated = True
                 return mock_wm
 
+            # PlanComposite.execute is called twice: L0 plan (returns child_dag)
+            # and terminal L1 plan (returns child_dag=None).
+            plan_execute_mock = AsyncMock(
+                side_effect=[
+                    (l0_plan_output, 0.05),
+                    (terminal_plan_output, 0.05),
+                ]
+            )
+
             with (
                 # WorktreeManager is imported lazily inside orchestrator.run(),
                 # so we patch it in its own module (agent_agent.worktree).
@@ -365,7 +392,7 @@ class TestOrchestratorLifecycle:
                 # Patch the execute() method on each composite class in their modules.
                 patch(
                     "agent_agent.agents.plan.PlanComposite.execute",
-                    new=AsyncMock(return_value=(plan_output, 0.05)),
+                    new=plan_execute_mock,
                 ),
                 patch(
                     "agent_agent.agents.coding.CodingComposite.execute",

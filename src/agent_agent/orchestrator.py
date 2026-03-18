@@ -25,7 +25,7 @@ from .budget import BudgetManager
 from .config import Settings
 from .context.provider import ContextProvider
 from .context.shared import SharedContext
-from .dag.engine import build_stub_dag
+from .dag.engine import build_stub_dag, build_l0_dag
 from .dag.executor import AgentFn, DAGExecutor
 from .models.agent import CodeOutput, PlanOutput, ReviewOutput
 from .models.context import IssueContext, RepoMetadata
@@ -92,12 +92,14 @@ class Orchestrator:
         *,
         agent_fn: AgentFn | None = None,
         use_composites: bool = False,
+        issue_context: IssueContext | None = None,
     ) -> None:
         self._settings = settings
         self._repo_path = repo_path
         self._claude_md = claude_md_content
         self._issue_url = issue_url
         self._state = state_store
+        self._issue_context = issue_context
         # use_composites=True: executor uses real SDK composite dispatch (Phase 4).
         # use_composites=False (default): uses agent_fn or stub for backward compat.
         self._use_composites = use_composites
@@ -127,7 +129,7 @@ class Orchestrator:
         now = datetime.now(timezone.utc)
 
         # 1. Build SharedContext with repo metadata
-        issue_ctx = IssueContext(url=self._issue_url, title="", body="")
+        issue_ctx = self._issue_context or IssueContext(url=self._issue_url, title="", body="")
         repo_meta = RepoMetadata(
             path=self._repo_path,
             default_branch="main",
@@ -152,7 +154,10 @@ class Orchestrator:
         emit_event(EventType.DAG_STARTED, run_id, node_id=None)
 
         # 4. Build DAG nodes and persist before execution [P1.7/P1.8]
-        nodes = build_stub_dag(dag_run)
+        if self._use_composites:
+            nodes = build_l0_dag(dag_run)
+        else:
+            nodes = build_stub_dag(dag_run)
         for node in nodes:
             await self._state.create_dag_node(node)
 
@@ -204,7 +209,7 @@ class Orchestrator:
             server.should_exit = True
 
         # 10. Extract results from completed nodes
-        branch_name, summary = await self._extract_results(run_id, nodes)
+        branch_name, summary = await self._extract_results(run_id)
 
         _logger.info(
             "orchestrator.run_complete",
@@ -235,12 +240,17 @@ class Orchestrator:
             return parts[-1]
         return "0"
 
-    async def _extract_results(self, run_id: str, nodes: list[DAGNode]) -> tuple[str, str]:
-        """Extract branch_name from CodeOutput and summary from ReviewOutput."""
+    async def _extract_results(self, run_id: str) -> tuple[str, str]:
+        """Extract branch_name from CodeOutput and summary from ReviewOutput.
+
+        Queries ALL nodes from the state store (not just pre-built ones) so that
+        dynamically-spawned child DAG nodes (built by _spawn_child_dag) are included.
+        """
         branch_name = ""
         summary = ""
 
-        for node in nodes:
+        all_nodes = await self._state.list_dag_nodes(run_id)
+        for node in all_nodes:
             result = await self._state.get_node_result(node.id)
             if result is None:
                 continue
