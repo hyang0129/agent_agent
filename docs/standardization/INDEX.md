@@ -7,6 +7,7 @@ This folder defines cross-cutting conventions that apply to the entire `docs/` t
 | Document | Summary |
 |----------|---------|
 | [index-construction.md](index-construction.md) | Defines required sections, table format, summary and keyword rules, and maintenance obligations for every INDEX.md in the docs tree. Keywords: index, INDEX.md, format, keywords, summary, standardization. |
+| [github-repo-integration-testing.md](github-repo-integration-testing.md) | Defines the standard for Tier 3 integration tests: ephemeral GitHub repo lifecycle, fixture catalog format, fixture_repo pytest fixture usage, the 3-step fixture creation workflow, naming conventions, and bot account setup. Keywords: integration tests, fixture_repo, FixtureMeta, ephemeral repo, AGENT_AGENT_FIXTURE_BOT_TOKEN, fixture catalog, aaf- prefix, session_id. |
 
 ## Relationship to Other Docs
 
