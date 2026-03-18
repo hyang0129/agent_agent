@@ -9,6 +9,7 @@ Recurring implementation patterns that apply across multiple subsystems.
 | [dev-prod-separation.md](dev-prod-separation.md) | Establishes the environment configuration strategy using pydantic-settings, per-environment `.env` files, safety rails for dev, and separate databases per environment. Keywords: pydantic-settings, environment, dev, prod, config, safety rails, .env. |
 | [claude-md-best-practices.md](claude-md-best-practices.md) | Defines what to include and exclude in CLAUDE.md, the four scope levels, structural patterns, size targets, and the flywheel for improving adherence. Keywords: CLAUDE.md, context, persistent context, size, structure, adherence, gotchas. |
 | [claude-md-context-strategy.md](claude-md-context-strategy.md) | Defines the three-layer model for distributing agent guidance across CLAUDE.md (universal), system prompt injection (per-agent-type), and DAG context injection (task-specific) to preserve adherence budget. Keywords: CLAUDE.md, system prompt, context injection, ContextProvider, agent guidance, adherence, layers. |
+| [github-repo-fixtures.md](github-repo-fixtures.md) | Covers the GitHub-specific concerns for using public repos as agent evaluation fixtures: SWE-bench repo selection and instance construction, forking vs. cloning, licensing, repo stability, git history leakage, issue+repo pair design, and what to avoid. Keywords: SWE-bench, GitHub, fixtures, evaluation, FAIL_TO_PASS, base_commit, licensing, forking, information leakage. |
 
 ## Relationship to Other Docs
 
