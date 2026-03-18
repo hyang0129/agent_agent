@@ -1,0 +1,67 @@
+[
+  {
+    "fixture_id": "schema-and-or-type-annotation",
+    "complexity": "easy",
+    "upstream": "https://github.com/keleshev/schema",
+    "base_sha": "e443d24fd30a9c02c577d72792bdbb78d4e0fa08",
+    "license": "MIT",
+    "pr_number": 343,
+    "issue_number": 342,
+    "issue_title": "Wrong type annotation for `And` and `Or`",
+    "issue_body": "The constructors of `And` and `Or` are typed as `__init__(self, *args: Union[TSchema, Callable[..., Any]], ...)`.\n\nHowever, each `s in *args` is converted to a `Schema` automatically in `_build_schemas` which ultimately constructs a `Schema` object for each `s`. Therefore, `*args` should have the same annotation as `Schema.__init__(self, schema: Any, ...)`.\n\nMoreover, [README](README.rst) says the following:\n\n> #### Enumerated values\n> \n> Use Or.\n> \n> Example:\n> \n>     Schema(Or(1, 2, 3))\n\nBut following this currently results in an `Argument of type \"Literal[1]\" cannot be assigned to parameter \"args\" of type \"TSchema@Or | ((...) -> Any)\"` error.",
+    "synthetic_issue": false,
+    "merged_from": []
+  },
+  {
+    "fixture_id": "schema-or-dict-format-error",
+    "complexity": "easy",
+    "upstream": "https://github.com/keleshev/schema",
+    "base_sha": "a600fb465bdf2f4d4896df7d411ad3e57a4713bf",
+    "license": "MIT",
+    "pr_number": 247,
+    "issue_number": 240,
+    "issue_title": "Formatting error when supplying raw dict as schema to `Or`",
+    "issue_body": "I'm not sure if this is valid Schema usage, but I wanted to drop my reproduction here just in case.\r\n\r\nI have a schema that looks like this:\r\n\r\n```python\r\n  import schema as s\r\n\r\n  test1 = s.Or(str, {\r\n      s.Optional(\"gpu\"): str,\r\n      s.Optional(\"cpu\"): str\r\n  },\r\n               error=\"Got '{}'\")\r\n\r\n  test1.validate({\"cpu\": \"face\", \"gpu\": \"cake\"})\r\n```\r\n\r\nTrying to run that code throws this error:\r\n\r\n```python\r\nself = Schema(<class 'dict'>), data = {'cpu': 'face', 'gpu': 'cake'}\r\n\r\n    def validate(self, data):\r\n      Schema = self.__class__\r\n      s = self._schema\r\n>     e = self._error.format(data) if self._error else None\r\nE     KeyError: \"'cpu'\"\r\n\r\nenv/lib/python3.6/site-packages/schema.py:372: KeyError\r\n```\r\n\r\nWhen I trace, it looks like what's happening is that `self._error` on the `Or` schema is getting set to the FILLED schema, on this line:\r\n\r\nhttps://github.com/keleshev/schema/blob/master/schema.py#L345\r\n\r\nie, when I insert `print(self._error)` there, I see:\r\n\r\n```python\r\nGot '{}'\r\nGot '{'cpu': 'face', 'gpu': 'cake'}'\r\n```\r\n\r\nWhich creates this case:\r\n\r\n```python\r\n>>> \"Got '{'cpu': 'face', 'gpu': 'cake'}'\".format({'cpu': 'face', 'gpu': 'cake'})\r\nTraceback (most recent call last):\r\n  File \"<stdin>\", line 1, in <module>\r\nKeyError: \"'cpu'\"\r\n```\r\n\r\nThe issue's solved if I wrap the dictionary in `s.Schema`... but it might be worth having `Or`, `And` etc do the wrapping for us if it sees a raw dict to prevent this issue.\r\n\r\nHope this helps!",
+    "synthetic_issue": false,
+    "merged_from": []
+  },
+  {
+    "fixture_id": "schema-iterable-return-type",
+    "complexity": "easy",
+    "upstream": "https://github.com/keleshev/schema",
+    "base_sha": "eb7670f0f4615195393dc5350d49fa9a33304137",
+    "license": "MIT",
+    "pr_number": 91,
+    "issue_number": 83,
+    "issue_title": "Inconsistent return types for validate: type(schema) or type(data)?",
+    "issue_body": "I've noted a small inconsistency when validating with iterable and dict schemas:\n\n``` python\n        if flavor == ITERABLE:\n            data = Schema(type(s), error=e).validate(data)\n            return type(s)(Or(*s, error=e).validate(d) for d in data)\n        if flavor == DICT:\n            data = Schema(dict, error=e).validate(data)\n            new = type(data)()  # new - is a dict of the validated values\n            ...\n            return new\n```\n\nBriefly, when validating with iterable schemas the return type is that of the schema, when validating with dict schemas it's that of the input.\n\nPersonally I think that it's more flexible to have the return type match the one of the input.\n\nIdeas, preferences?\n",
+    "synthetic_issue": false,
+    "merged_from": []
+  },
+  {
+    "fixture_id": "schema-xor-dict-exclusive",
+    "complexity": "medium",
+    "upstream": "https://github.com/keleshev/schema",
+    "base_sha": "f463ab62d4d5078484e97fec071bac6876b9beef",
+    "license": "MIT",
+    "pr_number": 174,
+    "issue_number": 106,
+    "issue_title": "XOr implementation",
+    "issue_body": "First of all, this library is awesome.\n\nI've implemented a `XOr` class for exclusive schemas (shamelessly copying from the `Or` class). Maybe this is naively wrong, but so far this has worked as expected.\n\n``` python\nclass XOr(And):\n\n    def validate(self, data):\n        accepted = False\n        x = SchemaError([], [])\n        for s in [Schema(s, error=self._error) for s in self._args]:\n            try:\n                validated = s.validate(data)\n                if accepted:\n                    raise SchemaError(['%r did not validate %r' % (self, data)],\n                                      [self._error])\n                accepted = True\n            except SchemaError as _x:\n                x = _x\n        if not accepted:\n            raise SchemaError(['%r did not validate %r' % (self, data)] + x.autos,\n                              [self._error] + x.errors)\n        return validated\n```\n\nIf you are interested in this, I can open a PR.\n",
+    "synthetic_issue": false,
+    "merged_from": []
+  },
+  {
+    "fixture_id": "schema-use-type-incompatibility",
+    "complexity": "hard",
+    "upstream": "https://github.com/keleshev/schema",
+    "base_sha": "7434a6b3c9cd1672f0d491ed45114054750627af",
+    "license": "MIT",
+    "pr_number": 337,
+    "issue_number": 336,
+    "issue_title": "Type incompatibility introduced in version 0.7.8",
+    "issue_body": "After upgrading to Schema 0.7.8, type-checking tools (e.g., mypy) report new incompatibilities when using the And combinator with Use. The issue did not occur in previous versions (≤ 0.7.7).\n\n```\nerror: Argument 2 to \"And\" has incompatible type \"Use\"; expected \"Callable[..., Any]\"  [arg-type]\n```\n\nsteps to reproduce\n\n```python\nfrom schema import And, Use\n\n# Minimal example\nschema = And(int, Use(int))\n\n```\n\nRunning mypy on this snippet with Schema 0.7.8 triggers the above error.",
+    "synthetic_issue": false,
+    "merged_from": []
+  }
+]

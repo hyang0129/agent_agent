@@ -49,4 +49,6 @@ timeout = 300
 markers = [
     "github: tests that require GITHUB_TOKEN and create real GitHub resources",
     "sdk: tests that require ANTHROPIC_API_KEY and make real SDK calls",
+    "integration: end-to-end tests requiring AGENT_AGENT_FIXTURE_BOT_TOKEN + GITHUB_TOKEN + ANTHROPIC_API_KEY",
 ]
+addopts = "-m 'not integration'"

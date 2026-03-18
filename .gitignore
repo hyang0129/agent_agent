@@ -29,3 +29,8 @@ htmlcov/
 .DS_Store
 *.sqlite
 *.db
+
+# Fixture staging — unreviewed snapshots and candidate lists, not committed until promoted
+staging/
+
+.env

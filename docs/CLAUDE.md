@@ -16,6 +16,7 @@ Route every new document to exactly one folder based on its primary purpose:
 | `theory/` | The document explores a *conceptual distinction* or design philosophy, not a concrete decision. | Design goals vs. design guidance, tradeoff analyses |
 | `goals/` | The document describes the north-star *outcome* the system is trying to achieve. | What "done" looks like, success criteria |
 | `standardization/` | The document defines cross-cutting formatting or structural conventions that govern other docs. | Index format rules, naming conventions, summary standards |
+| `workflows/` | The document describes a step-by-step operator procedure for a recurring task. | Fixture creation, evaluation runs, release steps |
 
 **If a document spans two folders:** place it where its primary audience will look; add a cross-reference line in the other folder's index.
 
@@ -95,6 +96,7 @@ Read the relevant index before opening any document. Each index contains summari
 | `theory/` | [theory/INDEX.md](theory/INDEX.md) | Conceptual distinctions and design philosophy |
 | `goals/` | [goals/goals.md](goals/goals.md) | Single file serves as its own index |
 | `standardization/` | [standardization/INDEX.md](standardization/INDEX.md) | Cross-cutting formatting and structural conventions |
+| `workflows/` | [workflows/INDEX.md](workflows/INDEX.md) | Operator procedures for recurring development tasks |
 
 > **Index format rules** are defined in [standardization/index-construction.md](standardization/index-construction.md). If this file and that document disagree on formatting, the standardization document wins.
 
