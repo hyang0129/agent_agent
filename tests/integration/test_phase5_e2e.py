@@ -26,6 +26,7 @@ Run by tier:
 from __future__ import annotations
 
 import os
+import random
 import re
 import socket
 import subprocess
@@ -47,6 +48,7 @@ from tests.integration.conftest import load_all_fixtures
 
 _EASY_FIXTURES = [f for f in load_all_fixtures() if f.complexity == "easy"]
 _MEDIUM_FIXTURES = [f for f in load_all_fixtures() if f.complexity == "medium"]
+_HARD_FIXTURES = random.sample([f for f in load_all_fixtures() if f.complexity == "hard"], 3)
 
 _GIT_ENV = {
     **os.environ,
@@ -120,22 +122,12 @@ def run_artifact_dir(
     return artifact_dir
 
 
-@pytest.mark.integration
-@pytest.mark.sdk
-@pytest.mark.timeout(1200)  # 20 min — full Plan+Coding+Review pipeline can take 10-15 min
-@pytest.mark.parametrize(
-    "fixture_repo",
-    _EASY_FIXTURES,
-    indirect=True,
-    ids=lambda m: m.fixture_id,
-)
-async def test_phase5_schema_issue_resolution(
+async def _run_e2e_test(
     fixture_repo: tuple[str, int],
-    tmp_path: Path,
-    monkeypatch: pytest.MonkeyPatch,
     run_artifact_dir: Path,
+    monkeypatch: pytest.MonkeyPatch,
 ) -> None:
-    """Phase 5 gate: resolve a real schema issue end-to-end.
+    """Shared body for easy and medium e2e tests.
 
     Assertions:
     A1. orchestrator.run() returns non-empty (branch_name, summary)
@@ -143,6 +135,7 @@ async def test_phase5_schema_issue_resolution(
     A3. Branch is visible on the ephemeral GitHub remote (push succeeded)
     A4. DAGRun.status == COMPLETED
     A5. DAGRun.usd_used is between 0 and max_budget_usd (real SDK calls were made)
+    A6. PR was opened on the ephemeral GitHub remote
     """
     repo_url, issue_number = fixture_repo
     repo_path_part = repo_url.removeprefix("https://github.com/")
@@ -264,6 +257,24 @@ async def test_phase5_schema_issue_resolution(
 
 @pytest.mark.integration
 @pytest.mark.sdk
+@pytest.mark.timeout(1200)  # 20 min — full Plan+Coding+Review pipeline can take 10-15 min
+@pytest.mark.parametrize(
+    "fixture_repo",
+    _EASY_FIXTURES,
+    indirect=True,
+    ids=lambda m: m.fixture_id,
+)
+async def test_phase5_schema_issue_resolution(
+    fixture_repo: tuple[str, int],
+    monkeypatch: pytest.MonkeyPatch,
+    run_artifact_dir: Path,
+) -> None:
+    """Phase 5 easy-tier gate: resolve a real schema issue end-to-end."""
+    await _run_e2e_test(fixture_repo, run_artifact_dir, monkeypatch)
+
+
+@pytest.mark.integration
+@pytest.mark.sdk
 @pytest.mark.timeout(1800)  # 30 min — medium fixtures require reading 2-4 files, more turns
 @pytest.mark.parametrize(
     "fixture_repo",
@@ -273,111 +284,34 @@ async def test_phase5_schema_issue_resolution(
 )
 async def test_phase5_medium_issue_resolution(
     fixture_repo: tuple[str, int],
-    tmp_path: Path,
     monkeypatch: pytest.MonkeyPatch,
     run_artifact_dir: Path,
 ) -> None:
     """Phase 5 medium-tier gate: resolve a medium-complexity issue end-to-end.
 
-    Same assertions as the easy-tier test; separated to apply a longer timeout
-    appropriate for issues requiring 3-5 file changes and 30-100 LOC delta.
+    Separated from the easy-tier test to apply a longer timeout appropriate for
+    issues requiring 3-5 file changes and 30-100 LOC delta.
     """
-    repo_url, issue_number = fixture_repo
-    repo_path_part = repo_url.removeprefix("https://github.com/")
+    await _run_e2e_test(fixture_repo, run_artifact_dir, monkeypatch)
 
-    clone_dir = run_artifact_dir / "repo"
-    subprocess.run(
-        ["git", "clone", repo_url, str(clone_dir)],
-        check=True,
-        capture_output=True,
-        env=_GIT_ENV,
-    )
-    for cfg_key, cfg_val in [("user.email", "agent@agent-agent"), ("user.name", "Agent Agent")]:
-        subprocess.run(
-            ["git", "config", cfg_key, cfg_val],
-            cwd=clone_dir,
-            check=True,
-            capture_output=True,
-        )
 
-    issue_data = _fetch_issue(repo_path_part, issue_number)
-    issue_url = f"{repo_url}/issues/{issue_number}"
-    issue_ctx = IssueContext(
-        url=issue_url,
-        title=issue_data["title"],
-        body=issue_data["body"],
-    )
+@pytest.mark.integration
+@pytest.mark.sdk
+@pytest.mark.timeout(2700)  # 45 min — hard fixtures require architectural exploration, 100+ LOC
+@pytest.mark.parametrize(
+    "fixture_repo",
+    _HARD_FIXTURES,
+    indirect=True,
+    ids=lambda m: m.fixture_id,
+)
+async def test_phase5_hard_issue_resolution(
+    fixture_repo: tuple[str, int],
+    monkeypatch: pytest.MonkeyPatch,
+    run_artifact_dir: Path,
+) -> None:
+    """Phase 5 hard-tier gate: resolve a hard-complexity issue end-to-end.
 
-    claude_md = (clone_dir / "CLAUDE.md").read_text() if (clone_dir / "CLAUDE.md").exists() else ""
-
-    worktree_base = str(run_artifact_dir / "worktrees")
-    Path(worktree_base).mkdir(parents=True, exist_ok=True)
-
-    settings = _make_settings(worktree_base=worktree_base, port=_get_free_port())
-
-    state_store = StateStore(str(run_artifact_dir / "state.db"))
-    await state_store.init()
-
-    run_id_holder: list[str] = []
-    _orig_create = state_store.create_dag_run
-
-    async def _capturing_create(run: Any) -> None:
-        run_id_holder.append(run.id)
-        return await _orig_create(run)
-
-    state_store.create_dag_run = _capturing_create  # type: ignore[method-assign]
-
-    mock_server = MagicMock()
-    mock_server.should_exit = False
-    mock_server.serve = AsyncMock(return_value=None)
-    monkeypatch.setattr(uvicorn, "Server", lambda _cfg: mock_server)
-
-    try:
-        orchestrator = Orchestrator(
-            settings=settings,
-            repo_path=str(clone_dir),
-            claude_md_content=claude_md,
-            issue_url=issue_url,
-            state_store=state_store,
-            use_composites=True,
-            issue_context=issue_ctx,
-        )
-        branch_name, summary = await orchestrator.run()
-
-        assert branch_name, f"empty branch_name; summary={summary!r}"
-        assert summary, f"empty summary; branch={branch_name!r}"
-        assert branch_name.startswith("agent"), f"branch {branch_name!r} must start with 'agent'"
-
-        remote_heads = subprocess.run(
-            ["git", "ls-remote", "--heads", repo_url],
-            capture_output=True,
-            text=True,
-            check=True,
-        ).stdout
-        assert any(
-            segment in remote_heads for segment in [branch_name, branch_name.split("/")[-1]]
-        ), f"Branch {branch_name!r} not found on remote.\nRemote heads:\n{remote_heads}"
-
-        assert run_id_holder, "create_dag_run was never called"
-        dag_run = await state_store.get_dag_run(run_id_holder[0])
-        assert dag_run is not None
-        assert dag_run.status == DAGRunStatus.COMPLETED, f"Expected COMPLETED, got {dag_run.status}"
-        assert 0 < dag_run.usd_used <= settings.max_budget_usd, (
-            f"usd_used={dag_run.usd_used!r} out of range (0, {settings.max_budget_usd}]"
-        )
-
-        token = os.environ.get("GITHUB_TOKEN", "")
-        headers = {"X-GitHub-Api-Version": "2022-11-28"}
-        if token:
-            headers["Authorization"] = f"Bearer {token}"
-        prs = httpx.get(
-            f"https://api.github.com/repos/{repo_path_part}/pulls",
-            params={"state": "open", "head": branch_name},
-            headers=headers,
-            timeout=30,
-        )
-        prs.raise_for_status()
-        assert prs.json(), f"No open PR found for branch {branch_name!r} on {repo_path_part}"
-
-    finally:
-        await state_store.close()
+    Runs 3 randomly sampled hard fixtures (4+ files, 100+ LOC delta, architectural
+    exploration required). Timeout set to 45 min to accommodate deeper agent turns.
+    """
+    await _run_e2e_test(fixture_repo, run_artifact_dir, monkeypatch)

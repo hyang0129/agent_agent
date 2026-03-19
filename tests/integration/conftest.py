@@ -325,7 +325,6 @@ def fixture_repo(
         )
 
         if not os.environ.get("KEEP_FIXTURE_REPOS"):
-
             def teardown() -> None:
                 with _FixtureBotClient(token) as teardown_client:
                     teardown_client.delete_repo(full_repo)
