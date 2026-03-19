@@ -1,9 +1,9 @@
 """Coding composite — iterative nested DAG of sub-agents.
 
 Internal cycle (max 3 cycles) [P10.4]:
-  Programmer -> Test Designer -> Test Executor -> Debugger
+  Programmer -> Tester -> Debugger
 
-Each cycle is a 4-node acyclic DAG persisted before execution [P1.8].
+Each cycle is a 3-node acyclic DAG persisted before execution [P1.8].
 Sub-agent outputs are persisted after each step for resumption [P10.5].
 Programmer and Debugger handle own git staging/committing [P10.13].
 Push-on-exit is composite-level [P10.13].
@@ -26,12 +26,11 @@ from ..observability import EventType, emit_event
 from ..state import StateStore
 from ..worktree import WorktreeRecord
 from .base import SubAgentConfig, compute_sdk_backstop, invoke_agent
-from .prompts import DEBUGGER, PROGRAMMER, TEST_DESIGNER, TEST_EXECUTOR
+from .prompts import DEBUGGER, PROGRAMMER, TESTER
 from .tools import (
     debugger_allowed_tools,
     programmer_allowed_tools,
-    test_designer_allowed_tools,
-    test_executor_allowed_tools,
+    tester_allowed_tools,
 )
 
 _logger = structlog.get_logger(__name__)
@@ -109,8 +108,8 @@ class CodingComposite:
                     dag_run_id, node_id, cycle, "programmer", programmer_output
                 )
 
-                # --- Test Designer ---
-                test_plan_output, cost = await self._invoke_test_designer(
+                # --- Tester ---
+                test_results, cost = await self._invoke_tester(
                     node_context,
                     dag_run_id,
                     node_id,
@@ -118,26 +117,13 @@ class CodingComposite:
                     code_output=programmer_output,
                 )
                 total_cost += cost
-                await self._persist_sub_agent_output(
-                    dag_run_id, node_id, cycle, "test_designer", test_plan_output
-                )
 
-                # --- Test Executor ---
-                test_results, cost = await self._invoke_test_executor(
-                    node_context,
-                    dag_run_id,
-                    node_id,
-                    cycle,
-                    test_plan=test_plan_output,
-                )
-                total_cost += cost
-
-                # --- Post-Test Executor validation: net-zero source changes [P3.3] ---
+                # --- Post-Tester validation: net-zero source changes [P3.3] ---
                 await self._validate_no_source_modifications(dag_run_id, node_id, cycle)
 
                 last_test_output = test_results
                 await self._persist_sub_agent_output(
-                    dag_run_id, node_id, cycle, "test_executor", test_results
+                    dag_run_id, node_id, cycle, "tester", test_results
                 )
 
                 # Check if tests pass -> done
@@ -241,7 +227,7 @@ class CodingComposite:
             raise AgentError(f"Programmer expected CodeOutput, got {type(output).__name__}")
         return output, cost
 
-    async def _invoke_test_designer(
+    async def _invoke_tester(
         self,
         node_context: NodeContext,
         dag_run_id: str,
@@ -253,11 +239,11 @@ class CodingComposite:
         augmented = self._augment_context_with_output(node_context, "programmer", code_output)
 
         config = SubAgentConfig(
-            name="test_designer",
-            system_prompt=TEST_DESIGNER.format(worktree_path=self._worktree.path),
-            allowed_tools=test_designer_allowed_tools(),
+            name="tester",
+            system_prompt=TESTER.format(worktree_path=self._worktree.path),
+            allowed_tools=tester_allowed_tools(),
             output_model=AgentTestOutput,
-            max_turns=self._settings.test_designer_max_turns,
+            max_turns=self._settings.tester_max_turns,
         )
 
         output, cost = await invoke_agent(
@@ -270,45 +256,10 @@ class CodingComposite:
             ),
             cwd=self._worktree.path,
             dag_run_id=dag_run_id,
-            node_id=f"{node_id}-cycle{cycle}-test_designer",
+            node_id=f"{node_id}-cycle{cycle}-tester",
         )
         if not isinstance(output, AgentTestOutput):
-            raise AgentError(f"TestDesigner expected AgentTestOutput, got {type(output).__name__}")
-        return output, cost
-
-    async def _invoke_test_executor(
-        self,
-        node_context: NodeContext,
-        dag_run_id: str,
-        node_id: str,
-        cycle: int,
-        test_plan: AgentTestOutput,
-    ) -> tuple[AgentTestOutput, float]:
-        system_prompt = TEST_EXECUTOR.format(worktree_path=self._worktree.path)
-        augmented = self._augment_context_with_output(node_context, "test_designer", test_plan)
-
-        config = SubAgentConfig(
-            name="test_executor",
-            system_prompt=system_prompt,
-            allowed_tools=test_executor_allowed_tools(),
-            output_model=AgentTestOutput,
-            max_turns=self._settings.test_executor_max_turns,
-        )
-
-        output, cost = await invoke_agent(
-            config=config,
-            node_context=augmented,
-            model=self._settings.model,
-            sdk_budget_backstop_usd=compute_sdk_backstop(
-                self._budget.remaining_node(node_id),
-                self._settings.max_budget_usd,
-            ),
-            cwd=self._worktree.path,
-            dag_run_id=dag_run_id,
-            node_id=f"{node_id}-cycle{cycle}-test_executor",
-        )
-        if not isinstance(output, AgentTestOutput):
-            raise AgentError(f"TestExecutor expected AgentTestOutput, got {type(output).__name__}")
+            raise AgentError(f"Tester expected AgentTestOutput, got {type(output).__name__}")
         return output, cost
 
     async def _invoke_debugger(
@@ -324,7 +275,7 @@ class CodingComposite:
         # Include both CodeOutput and TestOutput in context
         augmented = self._augment_context_with_outputs(
             node_context,
-            {"programmer": code_output, "test_executor": test_results},
+            {"programmer": code_output, "tester": test_results},
         )
 
         config = SubAgentConfig(
@@ -387,8 +338,8 @@ class CodingComposite:
             emit_event(
                 EventType.TOOL_DENIED,
                 dag_run_id,
-                node_id=f"{node_id}-cycle{cycle}-test_executor",
-                reason="test_executor_modified_source_files",
+                node_id=f"{node_id}-cycle{cycle}-tester",
+                reason="tester_modified_source_files",
                 files=modified_files,
             )
             # Revert source file changes to restore Programmer's committed state

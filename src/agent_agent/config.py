@@ -48,8 +48,7 @@ class Settings(BaseSettings):
 
     # CodingComposite sub-agent turn caps
     programmer_max_turns: int = 100
-    test_designer_max_turns: int = 15
-    test_executor_max_turns: int = 100
+    tester_max_turns: int = 115
     debugger_max_turns: int = 100
     reviewer_max_turns: int = 20
 

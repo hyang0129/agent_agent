@@ -66,8 +66,7 @@ def _make_settings(worktree_base: str, port: int = 19300) -> Settings:
         plan_thinking_budget_tokens=0,
         plan_max_turns=100,
         programmer_max_turns=100,
-        test_designer_max_turns=100,
-        test_executor_max_turns=100,
+        tester_max_turns=100,
         debugger_max_turns=100,
         reviewer_max_turns=100,
     )

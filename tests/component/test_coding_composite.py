@@ -42,8 +42,7 @@ def _make_settings(**overrides: Any) -> Settings:
         "max_budget_usd": 1.0,
         "git_push_enabled": True,
         "programmer_max_turns": 100,
-        "test_designer_max_turns": 100,
-        "test_executor_max_turns": 100,
+        "tester_max_turns": 100,
         "debugger_max_turns": 100,
     }
     defaults.update(overrides)
@@ -349,7 +348,7 @@ class TestCodingCompositeSubAgentsPersisted:
 
         # Verify sub-agent outputs were persisted
         entries = await state_store.list_shared_context("run-1")
-        assert len(entries) >= 3  # At least programmer + test_designer + test_executor
+        assert len(entries) >= 2  # At least programmer + tester
         categories = [e["category"] for e in entries]
         assert all(c == "sub_agent_output" for c in categories)
 

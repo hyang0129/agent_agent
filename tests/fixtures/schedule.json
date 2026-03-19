@@ -1,0 +1,15 @@
+[
+  {
+    "fixture_id": "schedule-recursion-repr",
+    "complexity": "easy",
+    "upstream": "https://github.com/dbader/schedule",
+    "base_sha": "3108fc3194c2f3071d6e41adfd21577fc62c52fc",
+    "license": "MIT",
+    "pr_number": 277,
+    "issue_number": 190,
+    "issue_title": "Job.__repr__ causes a RecursionError when the job is passed to the do function as an arg.",
+    "issue_body": "I wish to pass the job instance to the do function of the same job i.e. `do(some_function, job)`.  However, due to the way repr is defined for job this causes a `RecursionError`.\r\nThis is the culprit:\r\n```python\r\nargs = [repr(x) for x in self.job_func.args]\r\n```",
+    "synthetic_issue": false,
+    "merged_from": []
+  }
+]
