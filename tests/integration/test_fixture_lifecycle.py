@@ -37,5 +37,7 @@ def test_fixture_lifecycle(fixture_repo: tuple[str, int]) -> None:
     r = httpx.get(f"https://api.github.com/repos/{repo_path}", headers=headers)
     assert r.status_code == 200
 
-    r2 = httpx.get(f"https://api.github.com/repos/{repo_path}/issues/{issue_number}", headers=headers)
+    r2 = httpx.get(
+        f"https://api.github.com/repos/{repo_path}/issues/{issue_number}", headers=headers
+    )
     assert r2.status_code == 200

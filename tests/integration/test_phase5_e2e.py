@@ -1,8 +1,7 @@
 """Phase 5 end-to-end integration tests against real GitHub fixture repos.
 
-Tests the full orchestrator (use_composites=True) on 2 easy-tier schema issues:
-  - schema-and-or-type-annotation: wrong type annotations on And/Or constructors
-  - schema-or-dict-format-error: KeyError when raw dict is passed to Or with error=
+Tests the full orchestrator (use_composites=True) across all complexity tiers.
+Parametrized over the approved fixture catalog at tests/fixtures/*.json.
 
 Each test:
   1. fixture_repo creates an ephemeral GitHub repo at the pre-fix base_sha + posts the issue.
@@ -14,15 +13,22 @@ Markers:
   integration — requires GITHUB_TOKEN
   sdk         — requires claude CLI auth (Max plan); unset CLAUDECODE before running
 
-Run:
+Run all tiers:
     set -a && source .env && set +a
     unset CLAUDECODE
-    pytest tests/integration/test_phase5_e2e.py -m "integration and sdk" -v --timeout=600
+    pytest tests/integration/test_phase5_e2e.py -m "integration and sdk" -v
+
+Run by tier:
+    pytest tests/integration/test_phase5_e2e.py -k easy -m "integration and sdk" -v
+    pytest tests/integration/test_phase5_e2e.py -k medium -m "integration and sdk" -v -n 2
 """
 
 from __future__ import annotations
 
 import os
+import random
+import re
+import socket
 import subprocess
 from pathlib import Path
 from typing import Any
@@ -40,8 +46,9 @@ from agent_agent.state import StateStore
 from tests.integration.conftest import load_all_fixtures
 
 
-# Only easy-tier fixtures — quick to run, single-file changes, clear acceptance criteria.
 _EASY_FIXTURES = [f for f in load_all_fixtures() if f.complexity == "easy"]
+_MEDIUM_FIXTURES = [f for f in load_all_fixtures() if f.complexity == "medium"]
+_HARD_FIXTURES = random.sample([f for f in load_all_fixtures() if f.complexity == "hard"], 3)
 
 _GIT_ENV = {
     **os.environ,
@@ -51,10 +58,17 @@ _GIT_ENV = {
     "GIT_COMMITTER_EMAIL": "agent-agent-test@localhost",
 }
 
-_WORKTREE_BASE = "/workspaces/.agent_agent_tests/integration_worktrees"
+_ARTIFACT_BASE = Path("/workspaces/.agent_agent_tests/runs")
 
 
-def _make_settings(worktree_base: str, port: int = 19300) -> Settings:
+def _get_free_port() -> int:
+    """Return an ephemeral free TCP port (uvicorn is mocked so it is never bound)."""
+    with socket.socket(socket.AF_INET, socket.SOCK_STREAM) as s:
+        s.bind(("", 0))
+        return s.getsockname()[1]
+
+
+def _make_settings(worktree_base: str, port: int) -> Settings:
     return Settings(
         env="test",
         max_budget_usd=3.0,
@@ -91,21 +105,29 @@ def _fetch_issue(repo_path: str, issue_number: int) -> dict[str, str]:
     return {"title": data["title"], "body": data.get("body") or ""}
 
 
-@pytest.mark.integration
-@pytest.mark.sdk
-@pytest.mark.timeout(1200)  # 20 min — full Plan+Coding+Review pipeline can take 10-15 min
-@pytest.mark.parametrize(
-    "fixture_repo",
-    _EASY_FIXTURES,
-    indirect=True,
-    ids=lambda m: m.fixture_id,
-)
-async def test_phase5_schema_issue_resolution(
+@pytest.fixture()
+def run_artifact_dir(
+    request: pytest.FixtureRequest,
+    session_id: str,
+) -> Path:
+    """Return a persistent per-test artifact directory under /workspaces/.agent_agent_tests/runs/.
+
+    Path: /workspaces/.agent_agent_tests/runs/<session_id>/<fixture_id>/
+    Never cleaned up — survives the pytest session for post-run inspection.
+    With xdist, session_id is per-worker (each worker has its own UUID).
+    """
+    param_id = re.sub(r".*\[(.+)\]$", r"\1", request.node.name)
+    artifact_dir = _ARTIFACT_BASE / session_id / param_id
+    artifact_dir.mkdir(parents=True, exist_ok=True)
+    return artifact_dir
+
+
+async def _run_e2e_test(
     fixture_repo: tuple[str, int],
-    tmp_path: Path,
+    run_artifact_dir: Path,
     monkeypatch: pytest.MonkeyPatch,
 ) -> None:
-    """Phase 5 gate: resolve a real schema issue end-to-end.
+    """Shared body for easy and medium e2e tests.
 
     Assertions:
     A1. orchestrator.run() returns non-empty (branch_name, summary)
@@ -113,12 +135,13 @@ async def test_phase5_schema_issue_resolution(
     A3. Branch is visible on the ephemeral GitHub remote (push succeeded)
     A4. DAGRun.status == COMPLETED
     A5. DAGRun.usd_used is between 0 and max_budget_usd (real SDK calls were made)
+    A6. PR was opened on the ephemeral GitHub remote
     """
     repo_url, issue_number = fixture_repo
     repo_path_part = repo_url.removeprefix("https://github.com/")
 
     # Clone using plain HTTPS — the devcontainer credential helper handles auth.
-    clone_dir = tmp_path / "repo"
+    clone_dir = run_artifact_dir / "repo"
     subprocess.run(
         ["git", "clone", repo_url, str(clone_dir)],
         check=True,
@@ -142,18 +165,17 @@ async def test_phase5_schema_issue_resolution(
         body=issue_data["body"],
     )
 
-    claude_md = (
-        (clone_dir / "CLAUDE.md").read_text()
-        if (clone_dir / "CLAUDE.md").exists()
-        else ""
-    )
+    claude_md = (clone_dir / "CLAUDE.md").read_text() if (clone_dir / "CLAUDE.md").exists() else ""
 
-    worktree_base = str(tmp_path / "worktrees")
+    worktree_base = str(run_artifact_dir / "worktrees")
     Path(worktree_base).mkdir(parents=True, exist_ok=True)
 
-    settings = _make_settings(worktree_base=worktree_base)
+    settings = _make_settings(
+        worktree_base=worktree_base,
+        port=_get_free_port(),
+    )
 
-    state_store = StateStore(":memory:")
+    state_store = StateStore(str(run_artifact_dir / "state.db"))
     await state_store.init()
 
     # Capture run_id without having to list all dag runs.
@@ -191,9 +213,7 @@ async def test_phase5_schema_issue_resolution(
         assert summary, f"empty summary; branch={branch_name!r}"
 
         # A2: branch naming convention
-        assert branch_name.startswith("agent"), (
-            f"branch {branch_name!r} must start with 'agent'"
-        )
+        assert branch_name.startswith("agent"), f"branch {branch_name!r} must start with 'agent'"
 
         # A3: branch visible on the GitHub remote (push succeeded)
         remote_heads = subprocess.run(
@@ -203,20 +223,14 @@ async def test_phase5_schema_issue_resolution(
             check=True,
         ).stdout
         assert any(
-            segment in remote_heads
-            for segment in [branch_name, branch_name.split("/")[-1]]
-        ), (
-            f"Branch {branch_name!r} not found on remote.\n"
-            f"Remote heads:\n{remote_heads}"
-        )
+            segment in remote_heads for segment in [branch_name, branch_name.split("/")[-1]]
+        ), f"Branch {branch_name!r} not found on remote.\nRemote heads:\n{remote_heads}"
 
         # A4: DAGRun completed cleanly
         assert run_id_holder, "create_dag_run was never called"
         dag_run = await state_store.get_dag_run(run_id_holder[0])
         assert dag_run is not None
-        assert dag_run.status == DAGRunStatus.COMPLETED, (
-            f"Expected COMPLETED, got {dag_run.status}"
-        )
+        assert dag_run.status == DAGRunStatus.COMPLETED, f"Expected COMPLETED, got {dag_run.status}"
 
         # A5: real spend — not a stub run
         assert 0 < dag_run.usd_used <= settings.max_budget_usd, (
@@ -235,9 +249,69 @@ async def test_phase5_schema_issue_resolution(
             timeout=30,
         )
         prs.raise_for_status()
-        assert prs.json(), (
-            f"No open PR found for branch {branch_name!r} on {repo_path_part}"
-        )
+        assert prs.json(), f"No open PR found for branch {branch_name!r} on {repo_path_part}"
 
     finally:
         await state_store.close()
+
+
+@pytest.mark.integration
+@pytest.mark.sdk
+@pytest.mark.timeout(1200)  # 20 min — full Plan+Coding+Review pipeline can take 10-15 min
+@pytest.mark.parametrize(
+    "fixture_repo",
+    _EASY_FIXTURES,
+    indirect=True,
+    ids=lambda m: m.fixture_id,
+)
+async def test_phase5_schema_issue_resolution(
+    fixture_repo: tuple[str, int],
+    monkeypatch: pytest.MonkeyPatch,
+    run_artifact_dir: Path,
+) -> None:
+    """Phase 5 easy-tier gate: resolve a real schema issue end-to-end."""
+    await _run_e2e_test(fixture_repo, run_artifact_dir, monkeypatch)
+
+
+@pytest.mark.integration
+@pytest.mark.sdk
+@pytest.mark.timeout(1800)  # 30 min — medium fixtures require reading 2-4 files, more turns
+@pytest.mark.parametrize(
+    "fixture_repo",
+    _MEDIUM_FIXTURES,
+    indirect=True,
+    ids=lambda m: m.fixture_id,
+)
+async def test_phase5_medium_issue_resolution(
+    fixture_repo: tuple[str, int],
+    monkeypatch: pytest.MonkeyPatch,
+    run_artifact_dir: Path,
+) -> None:
+    """Phase 5 medium-tier gate: resolve a medium-complexity issue end-to-end.
+
+    Separated from the easy-tier test to apply a longer timeout appropriate for
+    issues requiring 3-5 file changes and 30-100 LOC delta.
+    """
+    await _run_e2e_test(fixture_repo, run_artifact_dir, monkeypatch)
+
+
+@pytest.mark.integration
+@pytest.mark.sdk
+@pytest.mark.timeout(2700)  # 45 min — hard fixtures require architectural exploration, 100+ LOC
+@pytest.mark.parametrize(
+    "fixture_repo",
+    _HARD_FIXTURES,
+    indirect=True,
+    ids=lambda m: m.fixture_id,
+)
+async def test_phase5_hard_issue_resolution(
+    fixture_repo: tuple[str, int],
+    monkeypatch: pytest.MonkeyPatch,
+    run_artifact_dir: Path,
+) -> None:
+    """Phase 5 hard-tier gate: resolve a hard-complexity issue end-to-end.
+
+    Runs 3 randomly sampled hard fixtures (4+ files, 100+ LOC delta, architectural
+    exploration required). Timeout set to 45 min to accommodate deeper agent turns.
+    """
+    await _run_e2e_test(fixture_repo, run_artifact_dir, monkeypatch)

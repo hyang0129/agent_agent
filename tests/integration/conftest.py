@@ -19,6 +19,7 @@ import os
 import re
 import shutil
 import subprocess
+import time
 import uuid
 import warnings
 from pathlib import Path
@@ -139,17 +140,58 @@ class _FixtureBotClient:
     def __exit__(self, *args: object) -> None:
         self._client.close()
 
+    def _request_with_retry(
+        self,
+        method: str,
+        url: str,
+        *,
+        max_retries: int = 3,
+        **kwargs: object,
+    ) -> httpx.Response:
+        """Execute an HTTP request, retrying on GitHub rate limits."""
+        for attempt in range(max_retries + 1):
+            resp = self._client.request(method, url, **kwargs)
+            if resp.status_code == 429:
+                reset_ts = int(
+                    resp.headers.get("X-RateLimit-Reset", "0"),
+                )
+                sleep_s = max(reset_ts - int(time.time()), 1) if reset_ts else 60
+                logger.warning(
+                    "github_rate_limit_primary",
+                    attempt=attempt,
+                    sleep_s=sleep_s,
+                    url=url,
+                )
+                if attempt < max_retries:
+                    time.sleep(sleep_s)
+                    continue
+            elif resp.status_code == 403 and "Retry-After" in resp.headers:
+                sleep_s = int(resp.headers["Retry-After"])
+                logger.warning(
+                    "github_rate_limit_secondary",
+                    attempt=attempt,
+                    sleep_s=sleep_s,
+                    url=url,
+                )
+                if attempt < max_retries:
+                    time.sleep(sleep_s)
+                    continue
+            resp.raise_for_status()
+            return resp
+        resp.raise_for_status()
+        return resp  # unreachable; satisfies mypy
+
     def get_bot_username(self) -> str:
         """Return the login of the authenticated bot account; cached after first call."""
         if self._username is None:
-            resp = self._client.get("/user")
-            resp.raise_for_status()
+            resp = self._request_with_retry("GET", "/user")
             self._username = resp.json()["login"]
         return self._username
 
     def create_repo(self, repo_name: str, description: str) -> str:
         """Create a public repo under the bot account. Returns '<username>/<repo_name>'."""
-        resp = self._client.post(
+        resp = self._request_with_retry(
+            "POST",
             "/user/repos",
             json={
                 "name": repo_name,
@@ -158,23 +200,21 @@ class _FixtureBotClient:
                 "auto_init": False,
             },
         )
-        resp.raise_for_status()
         return resp.json()["full_name"]
 
     def post_issue(self, full_repo: str, title: str, body: str) -> int:
         """Open an issue on full_repo. Returns the issue number."""
-        resp = self._client.post(
+        resp = self._request_with_retry(
+            "POST",
             f"/repos/{full_repo}/issues",
             json={"title": title, "body": body},
         )
-        resp.raise_for_status()
         return int(resp.json()["number"])
 
     def delete_repo(self, full_repo: str) -> None:
         """Delete a repo. Logs a warning on failure; does not raise."""
         try:
-            resp = self._client.delete(f"/repos/{full_repo}")
-            resp.raise_for_status()
+            self._request_with_retry("DELETE", f"/repos/{full_repo}")
         except Exception as exc:
             warnings.warn(f"Failed to delete repo {full_repo}: {exc}", stacklevel=2)
 
@@ -184,11 +224,11 @@ class _FixtureBotClient:
         results: list[str] = []
         page = 1
         while True:
-            resp = self._client.get(
+            resp = self._request_with_retry(
+                "GET",
                 f"/users/{username}/repos",
                 params={"per_page": 100, "page": page},
             )
-            resp.raise_for_status()
             batch = resp.json()
             if not batch:
                 break
@@ -217,11 +257,12 @@ def _integration_log_file(request: pytest.FixtureRequest) -> Generator[None, Non
 
 
 def pytest_configure(config: pytest.Config) -> None:
-    """Register the integration marker."""
+    """Register the integration marker and pre-create shared directories."""
     config.addinivalue_line(
         "markers",
         "integration: end-to-end tests requiring GITHUB_TOKEN and claude CLI authentication",
     )
+    _LOG_DIR.mkdir(parents=True, exist_ok=True)
 
 
 @pytest.fixture(scope="session")

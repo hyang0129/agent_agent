@@ -63,6 +63,95 @@ class CodingComposite:
         self._issue_number = issue_number
         self._node_id = node_id  # needed for push failure state update
 
+    async def _reconstruct_resume_point(
+        self,
+        dag_run_id: str,
+        node_id: str,
+    ) -> tuple[int, str, CodeOutput | None, AgentTestOutput | None]:
+        """Query persisted sub_agent_output records and reconstruct resume state.
+
+        Returns (start_cycle, start_sub_agent, last_code_output, last_test_output).
+        - start_cycle: first cycle that is incomplete
+        - start_sub_agent: "programmer" | "tester" | "debugger" — first step to run
+        - last_code_output: most recent CodeOutput persisted (programmer or debugger)
+        - last_test_output: most recent AgentTestOutput persisted (tester)
+        """
+        rows = await self._state.list_shared_context_for_node(dag_run_id, node_id)
+        sub_agent_rows = [r for r in rows if r["category"] == "sub_agent_output"]
+
+        completed: dict[tuple[int, str], dict] = {}
+        for row in sub_agent_rows:
+            data = json.loads(row["data"]) if isinstance(row["data"], str) else row["data"]
+            key = (data["cycle"], data["sub_agent"])
+            completed[key] = data
+
+        last_code: CodeOutput | None = None
+        last_test: AgentTestOutput | None = None
+
+        for cycle in range(MAX_CYCLES):
+            prog_data = completed.get((cycle, "programmer"))
+            if prog_data is None:
+                return (cycle, "programmer", last_code, last_test)
+
+            last_code = CodeOutput.model_validate(prog_data["output"])
+
+            tester_data = completed.get((cycle, "tester"))
+            if tester_data is None:
+                return (cycle, "tester", last_code, last_test)
+
+            last_test = AgentTestOutput.model_validate(tester_data["output"])
+
+            if last_test.passed:
+                # Tests passed — composite is fully done
+                return (MAX_CYCLES, "programmer", last_code, last_test)
+
+            # Tests failed
+            debugger_data = completed.get((cycle, "debugger"))
+            if debugger_data is None and cycle + 1 < MAX_CYCLES:
+                return (cycle, "debugger", last_code, last_test)
+
+            if debugger_data is not None:
+                last_code = CodeOutput.model_validate(debugger_data["output"])
+
+        # All cycles complete
+        return (MAX_CYCLES, "programmer", last_code, last_test)
+
+    async def _restore_worktree_to_prior_branch(
+        self,
+        node_id: str,
+    ) -> None:
+        """Restore the worktree to the branch used in a prior run."""
+        node = await self._state.get_dag_node(node_id)
+        branch_name = node.branch_name if node else None
+
+        if branch_name is None or branch_name == self._worktree.branch:
+            return  # no-op
+
+        try:
+            await asyncio.to_thread(
+                subprocess.run,
+                ["git", "fetch", self._repo_path, branch_name],
+                cwd=self._worktree.path,
+                capture_output=True,
+                text=True,
+                check=True,
+            )
+            await asyncio.to_thread(
+                subprocess.run,
+                ["git", "reset", "--hard", "FETCH_HEAD"],
+                cwd=self._worktree.path,
+                capture_output=True,
+                text=True,
+                check=True,
+            )
+        except subprocess.CalledProcessError:
+            _logger.warning(
+                "coding_composite.worktree_restore_failed",
+                dag_run_id=self._worktree.dag_run_id,
+                node_id=node_id,
+                branch=branch_name,
+            )
+
     async def execute(
         self,
         node_context: NodeContext,
@@ -83,87 +172,117 @@ class CodingComposite:
         last_test_output: AgentTestOutput | None = None
         push_succeeded: bool = True
 
+        # Resume-point reconstruction [P10.5]
+        start_cycle, start_sub_agent, last_code_output, last_test_output = (
+            await self._reconstruct_resume_point(dag_run_id, node_id)
+        )
+
+        if start_cycle > 0 or start_sub_agent != "programmer":
+            _logger.info(
+                "coding_composite.resuming",
+                dag_run_id=dag_run_id,
+                node_id=node_id,
+                start_cycle=start_cycle,
+                start_sub_agent=start_sub_agent,
+            )
+            if last_code_output is not None:
+                await self._restore_worktree_to_prior_branch(node_id)
+
         try:
-            for cycle in range(MAX_CYCLES):
-                emit_event(
-                    EventType.NODE_STARTED,
-                    dag_run_id,
-                    node_id=node_id,
-                    cycle=cycle + 1,
-                    max_cycles=MAX_CYCLES,
-                )
-
-                # --- Programmer ---
-                programmer_output, cost = await self._invoke_programmer(
-                    node_context,
-                    dag_run_id,
-                    node_id,
-                    cycle,
-                    last_test_output=last_test_output,
-                )
-                total_cost += cost
-                last_code_output = programmer_output
-                # Persist sub-agent output for resumption [P10.5]
-                await self._persist_sub_agent_output(
-                    dag_run_id, node_id, cycle, "programmer", programmer_output
-                )
-
-                # --- Tester ---
-                test_results, cost = await self._invoke_tester(
-                    node_context,
-                    dag_run_id,
-                    node_id,
-                    cycle,
-                    code_output=programmer_output,
-                )
-                total_cost += cost
-
-                # --- Post-Tester validation: net-zero source changes [P3.3] ---
-                await self._validate_no_source_modifications(dag_run_id, node_id, cycle)
-
-                last_test_output = test_results
-                await self._persist_sub_agent_output(
-                    dag_run_id, node_id, cycle, "tester", test_results
-                )
-
-                # Check if tests pass -> done
-                if test_results.passed:
-                    last_code_output = CodeOutput(
-                        summary=programmer_output.summary,
-                        files_changed=programmer_output.files_changed,
-                        branch_name=self._worktree.branch,
-                        commit_sha=programmer_output.commit_sha,
-                        tests_passed=True,
-                        discoveries=programmer_output.discoveries,
-                    )
-                    break
-
-                # Tests failed, cycles remain -> invoke Debugger
-                if cycle + 1 < MAX_CYCLES:
-                    debugger_output, cost = await self._invoke_debugger(
-                        node_context,
+            # All cycles already completed in a prior run
+            if start_cycle >= MAX_CYCLES and last_code_output is not None:
+                pass  # skip the loop entirely; return reconstructed output below
+            else:
+                for cycle in range(start_cycle, MAX_CYCLES):
+                    emit_event(
+                        EventType.NODE_STARTED,
                         dag_run_id,
-                        node_id,
-                        cycle,
-                        code_output=programmer_output,
-                        test_results=test_results,
-                    )
-                    total_cost += cost
-                    last_code_output = debugger_output
-                    await self._persist_sub_agent_output(
-                        dag_run_id, node_id, cycle, "debugger", debugger_output
+                        node_id=node_id,
+                        cycle=cycle + 1,
+                        max_cycles=MAX_CYCLES,
                     )
 
-            # If we exhausted cycles without passing, set tests_passed=False
-            if last_code_output and not last_code_output.tests_passed:
-                last_code_output = CodeOutput(
-                    summary=last_code_output.summary,
-                    files_changed=last_code_output.files_changed,
-                    branch_name=self._worktree.branch,
-                    commit_sha=last_code_output.commit_sha,
-                    tests_passed=False,
-                    discoveries=last_code_output.discoveries,
-                )
+                    is_resuming_cycle = cycle == start_cycle
+                    skip_programmer = is_resuming_cycle and start_sub_agent != "programmer"
+                    skip_tester = is_resuming_cycle and start_sub_agent == "debugger"
+
+                    # --- Programmer ---
+                    if not skip_programmer:
+                        programmer_output, cost = await self._invoke_programmer(
+                            node_context,
+                            dag_run_id,
+                            node_id,
+                            cycle,
+                            last_test_output=last_test_output,
+                        )
+                        total_cost += cost
+                        last_code_output = programmer_output
+                        # Persist sub-agent output for resumption [P10.5]
+                        await self._persist_sub_agent_output(
+                            dag_run_id, node_id, cycle, "programmer", programmer_output
+                        )
+
+                    # --- Tester ---
+                    if not skip_tester:
+                        assert last_code_output is not None
+                        test_results, cost = await self._invoke_tester(
+                            node_context,
+                            dag_run_id,
+                            node_id,
+                            cycle,
+                            code_output=last_code_output,
+                        )
+                        total_cost += cost
+
+                        # --- Post-Tester validation: net-zero source changes [P3.3] ---
+                        await self._validate_no_source_modifications(dag_run_id, node_id, cycle)
+
+                        last_test_output = test_results
+                        await self._persist_sub_agent_output(
+                            dag_run_id, node_id, cycle, "tester", test_results
+                        )
+
+                    # Check if tests pass -> done
+                    if last_test_output and last_test_output.passed:
+                        assert last_code_output is not None
+                        last_code_output = CodeOutput(
+                            summary=last_code_output.summary,
+                            files_changed=last_code_output.files_changed,
+                            branch_name=self._worktree.branch,
+                            commit_sha=last_code_output.commit_sha,
+                            tests_passed=True,
+                            discoveries=last_code_output.discoveries,
+                        )
+                        break
+
+                    # Tests failed, cycles remain -> invoke Debugger
+                    if cycle + 1 < MAX_CYCLES:
+                        assert last_code_output is not None
+                        assert last_test_output is not None
+                        debugger_output, cost = await self._invoke_debugger(
+                            node_context,
+                            dag_run_id,
+                            node_id,
+                            cycle,
+                            code_output=last_code_output,
+                            test_results=last_test_output,
+                        )
+                        total_cost += cost
+                        last_code_output = debugger_output
+                        await self._persist_sub_agent_output(
+                            dag_run_id, node_id, cycle, "debugger", debugger_output
+                        )
+
+                # If we exhausted cycles without passing, set tests_passed=False
+                if last_code_output and not last_code_output.tests_passed:
+                    last_code_output = CodeOutput(
+                        summary=last_code_output.summary,
+                        files_changed=last_code_output.files_changed,
+                        branch_name=self._worktree.branch,
+                        commit_sha=last_code_output.commit_sha,
+                        tests_passed=False,
+                        discoveries=last_code_output.discoveries,
+                    )
 
         finally:
             # Push-on-exit [P1.11/P10.13] — always push regardless of success/failure

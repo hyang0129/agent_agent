@@ -177,7 +177,8 @@ class DAGExecutor:
 
         ordered = topological_sort(nodes)
 
-        emit_event(EventType.DAG_STARTED, dag_run.id, node_id=None)
+        # DAG_STARTED is emitted by Orchestrator.run() before calling execute().
+        # Emitting it here would create a duplicate event with the same dag_run_id.
         await self._state.update_dag_run_status(dag_run.id, DAGRunStatus.RUNNING.value)
 
         for node in ordered:
