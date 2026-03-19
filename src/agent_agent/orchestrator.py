@@ -7,8 +7,9 @@ Lifecycle:
   2. Creates DAGRun record in state store
   3. emit_event(DAG_STARTED, dag_run_id, node_id=None) — node_id=None per P11
   4. Binds in-process FastAPI server on settings.PORT (default 8100)
-  5. Hands off to executor (stub agents in Phase 3)
-  6. Returns (CodeOutput.branch_name, ReviewOutput.summary)
+  5. Hands off to DAGExecutor (real composites or stub depending on use_composites)
+  6. Opens a PR on GitHub if branch was pushed and dry_run_github=False
+  7. Returns (CodeOutput.branch_name, ReviewOutput.summary)
 """
 
 from __future__ import annotations
@@ -27,6 +28,7 @@ from .context.provider import ContextProvider
 from .context.shared import SharedContext
 from .dag.engine import build_stub_dag, build_l0_dag
 from .dag.executor import AgentFn, DAGExecutor
+from .github.client import GitHubClient, parse_issue_url
 from .models.agent import CodeOutput, PlanOutput, ReviewOutput
 from .models.context import IssueContext, RepoMetadata
 from .models.dag import DAGNode, DAGRun, DAGRunStatus, NodeType
@@ -136,6 +138,7 @@ class Orchestrator:
             claude_md=self._claude_md,
         )
         shared_context = SharedContext(issue=issue_ctx, repo_metadata=repo_meta)
+        self._shared_context = shared_context
 
         # 2. Create DAGRun record in state store
         dag_run = DAGRun(
@@ -199,7 +202,7 @@ class Orchestrator:
         set_state_store(self._state)
 
         # 7. Start in-process FastAPI server
-        server = self._start_server()
+        server = await self._start_server()
 
         try:
             # 8. Execute the DAG
@@ -211,6 +214,10 @@ class Orchestrator:
         # 10. Extract results from completed nodes
         branch_name, summary = await self._extract_results(run_id)
 
+        # 11. Open a PR on GitHub if a branch was pushed and GitHub writes are enabled
+        if branch_name and not self._settings.dry_run_github:
+            await self._create_pr(branch_name, summary)
+
         _logger.info(
             "orchestrator.run_complete",
             dag_run_id=run_id,
@@ -220,7 +227,7 @@ class Orchestrator:
 
         return branch_name, summary
 
-    def _start_server(self) -> uvicorn.Server:
+    async def _start_server(self) -> uvicorn.Server:
         """Start the FastAPI server in-process on a background task."""
         config = uvicorn.Config(
             fastapi_app,
@@ -229,7 +236,7 @@ class Orchestrator:
             log_level="warning",
         )
         server = uvicorn.Server(config)
-        asyncio.get_event_loop().create_task(server.serve())
+        asyncio.create_task(server.serve())
         return server
 
     def _extract_issue_number(self) -> str:
@@ -240,11 +247,61 @@ class Orchestrator:
             return parts[-1]
         return "0"
 
+    async def _create_pr(self, branch_name: str, summary: str) -> str:
+        """Open a PR on the GitHub remote for branch_name → default branch.
+
+        Returns the PR URL, or empty string if PR creation fails (non-fatal).
+        Guarded by dry_run_github — only called when dry_run_github=False.
+        """
+        try:
+            owner, repo, issue_number = parse_issue_url(self._issue_url)
+        except ValueError as exc:
+            _logger.warning("orchestrator.pr_skipped_bad_url", error=str(exc))
+            return ""
+
+        title = f"Fix #{issue_number}: agent-generated patch"
+        body = summary or f"Automated fix for issue #{issue_number}."
+
+        try:
+            async with GitHubClient(
+                dry_run=self._settings.dry_run_github,
+                token=None,  # reads GITHUB_TOKEN from env
+            ) as gh:
+                pr_url = await gh.create_pull_request(
+                    owner=owner,
+                    repo=repo,
+                    title=title,
+                    body=body,
+                    head=branch_name,
+                    base=self._shared_context.repo_metadata.default_branch,
+                )
+            _logger.info(
+                "orchestrator.pr_created",
+                pr_url=pr_url,
+                branch=branch_name,
+                owner=owner,
+                repo=repo,
+            )
+            return pr_url
+        except Exception as exc:
+            _logger.error(
+                "orchestrator.pr_creation_failed",
+                error=str(exc),
+                branch=branch_name,
+                owner=owner,
+                repo=repo,
+            )
+            return ""
+
     async def _extract_results(self, run_id: str) -> tuple[str, str]:
         """Extract branch_name from CodeOutput and summary from ReviewOutput.
 
         Queries ALL nodes from the state store (not just pre-built ones) so that
         dynamically-spawned child DAG nodes (built by _spawn_child_dag) are included.
+
+        branch_name: taken from the last CodeOutput with a non-empty branch_name.
+        summary: taken from the last ReviewOutput — always, regardless of whether
+            summary is empty (so callers see the actual agent output, not a stale "").
         """
         branch_name = ""
         summary = ""
@@ -256,7 +313,11 @@ class Orchestrator:
                 continue
             if isinstance(result.output, CodeOutput) and result.output.branch_name:
                 branch_name = result.output.branch_name
-            if isinstance(result.output, ReviewOutput) and result.output.summary:
+            if isinstance(result.output, ReviewOutput):
+                # Always update summary from the last ReviewOutput seen so callers
+                # receive the actual agent output rather than a stale empty string.
+                # A genuinely empty summary will surface as "" (agent quality issue),
+                # not silently masked by the old truthiness guard.
                 summary = result.output.summary
 
         return branch_name, summary

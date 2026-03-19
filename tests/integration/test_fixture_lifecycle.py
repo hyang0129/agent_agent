@@ -32,7 +32,7 @@ def test_fixture_lifecycle(fixture_repo: tuple[str, int]) -> None:
 
     repo_path = repo_url.removeprefix("https://github.com/")
 
-    token = os.environ.get("AGENT_AGENT_FIXTURE_BOT_TOKEN", "")
+    token = os.environ.get("GITHUB_TOKEN", "")
     headers = {"Authorization": f"Bearer {token}"} if token else {}
     r = httpx.get(f"https://api.github.com/repos/{repo_path}", headers=headers)
     assert r.status_code == 200

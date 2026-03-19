@@ -1,6 +1,6 @@
 #!/usr/bin/env bash
 # ============================================================================
-# Phase 4 SDK Integration Tests
+# Phase 5 SDK Integration Tests
 # ============================================================================
 #
 # Runs the component tests that make real Claude API calls.
@@ -22,13 +22,10 @@
 #   bash scripts/run_sdk_tests.sh tier3      # full E2E
 #
 # Prerequisites:
-#   - .env file with ANTHROPIC_API_KEY=sk-ant-...
+#   - claude CLI authenticated (Max plan OAuth in ~/.claude/)
 #   - venv at /workspaces/.venvs/agent_agent/
 #
-# Cost estimate:
-#   Tier 1: $0 (no API calls)
-#   Tier 2: ~$0.05-0.20 (4 Haiku calls)
-#   Tier 3: ~$0.50-2.00 (multi-turn Haiku calls with tool use)
+# Cost: routed through Claude Code Max plan (flat-rate, not per-token API)
 # ============================================================================
 
 set -euo pipefail
@@ -66,13 +63,6 @@ if [ -n "${CLAUDECODE:-}" ]; then
     warn "Do NOT run this inside Claude Code. Use a separate terminal."
     unset CLAUDECODE
 fi
-
-# Verify API key
-if [ -z "${ANTHROPIC_API_KEY:-}" ]; then
-    fail "ANTHROPIC_API_KEY not set. Check .env file."
-    exit 1
-fi
-info "API key found: ${ANTHROPIC_API_KEY:0:12}..."
 
 # Verify SDK installed
 if ! python -c "import claude_agent_sdk" 2>/dev/null; then
@@ -123,13 +113,13 @@ run_tier1() {
 }
 
 # ============================================================================
-# Tier 2: SDK smoke tests (real API calls, ~$0.05-0.20)
+# Tier 2: SDK smoke tests (real calls via claude CLI, Max plan flat-rate)
 # Tests invoke_agent with trivial prompts via Haiku
 # ============================================================================
 
 run_tier2() {
     info "═══════════════════════════════════════════════════════════"
-    info "Tier 2: SDK smoke tests (real API calls)"
+    info "Tier 2: SDK smoke tests (real calls via claude CLI)"
     info "═══════════════════════════════════════════════════════════"
 
     info "Running SDK wrapper tests..."
@@ -164,13 +154,13 @@ run_tier2() {
 }
 
 # ============================================================================
-# Tier 3: Full E2E (real API calls + real git, ~$0.50-2.00)
+# Tier 3: Full E2E (real calls via claude CLI + real git, Max plan flat-rate)
 # Coding composite with worktrees + push, E2E multi-level flow
 # ============================================================================
 
 run_tier3() {
     info "═══════════════════════════════════════════════════════════"
-    info "Tier 3: Full E2E (real API + real git)"
+    info "Tier 3: Full E2E (real calls via claude CLI + real git)"
     info "═══════════════════════════════════════════════════════════"
 
     info "Running Coding composite SDK tests..."
@@ -201,7 +191,7 @@ run_tier3() {
 # ============================================================================
 
 echo ""
-info "Phase 4 Integration Test Runner"
+info "Phase 5 Integration Test Runner"
 info "Repo: $REPO_DIR"
 info "Tier: $TIER"
 echo ""

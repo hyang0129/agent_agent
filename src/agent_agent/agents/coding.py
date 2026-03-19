@@ -254,7 +254,7 @@ class CodingComposite:
 
         config = SubAgentConfig(
             name="test_designer",
-            system_prompt=TEST_DESIGNER,
+            system_prompt=TEST_DESIGNER.format(worktree_path=self._worktree.path),
             allowed_tools=test_designer_allowed_tools(),
             output_model=AgentTestOutput,
             max_turns=self._settings.test_designer_max_turns,

@@ -1,0 +1,28 @@
+[
+  {
+    "fixture_id": "schema-and-or-type-annotation",
+    "complexity": "easy",
+    "upstream": "https://github.com/keleshev/schema",
+    "base_sha": "e443d24fd30a9c02c577d72792bdbb78d4e0fa08",
+    "license": "MIT",
+    "pr_number": 343,
+    "issue_number": 342,
+    "issue_title": "Wrong type annotation for `And` and `Or`",
+    "issue_body": "The constructors of `And` and `Or` are typed as `__init__(self, *args: Union[TSchema, Callable[..., Any]], ...)`.\n\nHowever, each `s in *args` is converted to a `Schema` automatically in `_build_schemas` which ultimately constructs a `Schema` object for each `s`. Therefore, `*args` should have the same annotation as `Schema.__init__(self, schema: Any, ...)`.\n\nMoreover, [README](README.rst) says the following:\n\n> #### Enumerated values\n> \n> Use Or.\n> \n> Example:\n> \n>     Schema(Or(1, 2, 3))\n\nBut following this currently results in an `Argument of type \"Literal[1]\" cannot be assigned to parameter \"args\" of type \"TSchema@Or | ((...) -> Any)\"` error.",
+    "synthetic_issue": false,
+    "merged_from": []
+  },
+  {
+    "fixture_id": "schema-or-dict-format-error",
+    "complexity": "easy",
+    "upstream": "https://github.com/keleshev/schema",
+    "base_sha": "a600fb465bdf2f4d4896df7d411ad3e57a4713bf",
+    "license": "MIT",
+    "pr_number": 247,
+    "issue_number": 240,
+    "issue_title": "Formatting error when supplying raw dict as schema to `Or`",
+    "issue_body": "I'm not sure if this is valid Schema usage, but I wanted to drop my reproduction here just in case.\r\n\r\nI have a schema that looks like this:\r\n\r\n```python\r\n  import schema as s\r\n\r\n  test1 = s.Or(str, {\r\n      s.Optional(\"gpu\"): str,\r\n      s.Optional(\"cpu\"): str\r\n  },\r\n               error=\"Got '{}'\")\r\n\r\n  test1.validate({\"cpu\": \"face\", \"gpu\": \"cake\"})\r\n```\r\n\r\nTrying to run that code throws this error:\r\n\r\n```python\r\nself = Schema(<class 'dict'>), data = {'cpu': 'face', 'gpu': 'cake'}\r\n\r\n    def validate(self, data):\r\n      Schema = self.__class__\r\n      s = self._schema\r\n>     e = self._error.format(data) if self._error else None\r\nE     KeyError: \"'cpu'\"\r\n\r\nenv/lib/python3.6/site-packages/schema.py:372: KeyError\r\n```\r\n\r\nWhen I trace, it looks like what's happening is that `self._error` on the `Or` schema is getting set to the FILLED schema, on this line:\r\n\r\nhttps://github.com/keleshev/schema/blob/master/schema.py#L345\r\n\r\nie, when I insert `print(self._error)` there, I see:\r\n\r\n```python\r\nGot '{}'\r\nGot '{'cpu': 'face', 'gpu': 'cake'}'\r\n```\r\n\r\nWhich creates this case:\r\n\r\n```python\r\n>>> \"Got '{'cpu': 'face', 'gpu': 'cake'}'\".format({'cpu': 'face', 'gpu': 'cake'})\r\nTraceback (most recent call last):\r\n  File \"<stdin>\", line 1, in <module>\r\nKeyError: \"'cpu'\"\r\n```\r\n\r\nThe issue's solved if I wrap the dictionary in `s.Schema`... but it might be worth having `Or`, `And` etc do the wrapping for us if it sees a raw dict to prevent this issue.\r\n\r\nHope this helps!",
+    "synthetic_issue": false,
+    "merged_from": []
+  }
+]

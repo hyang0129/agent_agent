@@ -5,6 +5,7 @@ Read operations:
 
 Write operations (all guarded by DRY_RUN_GITHUB):
   - create_branch: stub for Phase 4 wiring
+  - create_pull_request: open a PR from branch → base_branch
 
 Branch protection check:
   - raises NotImplementedError in Phase 3 — no write operations exist yet
@@ -134,6 +135,46 @@ class GitHubClient:
         )
         resp.raise_for_status()
         _logger.info("github.branch_created", owner=owner, repo=repo, branch=branch)
+
+    async def create_pull_request(
+        self,
+        owner: str,
+        repo: str,
+        *,
+        title: str,
+        body: str,
+        head: str,
+        base: str,
+    ) -> str:
+        """Open a pull request from head → base. Guarded by dry_run.
+
+        Returns the URL of the created PR.
+
+        Raises RuntimeError if dry_run=True.
+        Raises httpx.HTTPStatusError on API errors.
+        """
+        self._guard_write("create_pull_request")
+        resp = await self._http.post(
+            f"/repos/{owner}/{repo}/pulls",
+            json={
+                "title": title,
+                "body": body,
+                "head": head,
+                "base": base,
+            },
+        )
+        resp.raise_for_status()
+        data = resp.json()
+        pr_url: str = data.get("html_url", "")
+        _logger.info(
+            "github.pr_created",
+            owner=owner,
+            repo=repo,
+            head=head,
+            base=base,
+            pr_url=pr_url,
+        )
+        return pr_url
 
     # ------------------------------------------------------------------
     # Branch protection check

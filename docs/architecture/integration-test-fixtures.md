@@ -17,7 +17,7 @@ The codebase has two fixture patterns this design extends without replacing:
 **`github_test_repo` in `tests/fixtures/conftest.py`** — creates a real GitHub repo + issue under the user's personal account using `GITHUB_TOKEN`. Session-scoped, generic; does not plant real codebase content.
 
 The integration fixture system is distinct from both:
-- Uses `AGENT_AGENT_FIXTURE_BOT_TOKEN` (bot account), not `GITHUB_TOKEN` (user)
+- Uses `GITHUB_TOKEN` (same token for both bot operations and agent operations)
 - Creates public repos directly under the bot account — no org required
 - Repo names include a session-ID prefix (unique per pytest session) to support concurrent runs
 - Clones real upstream repos at pinned SHAs, pushes with single-commit history, plants the specific issue from the candidate metadata
@@ -139,18 +139,19 @@ Defined in `tests/integration/conftest.py`. **Function-scoped** — each test ge
 
 A custom marker `integration` is registered in `pyproject.toml` and `pytest_configure`. All integration tests carry `@pytest.mark.integration`.
 
-A session-scoped autouse fixture checks for `AGENT_AGENT_FIXTURE_BOT_TOKEN` at collection time. If absent, the session is skipped before any fixture setup runs.
+A session-scoped autouse fixture checks for `GITHUB_TOKEN` at collection time. If absent, the session is skipped before any fixture setup runs.
 
-Three tokens are required end-to-end:
+One token plus claude CLI credentials are required end-to-end:
 
 | Variable | Used by | Purpose |
 |---|---|---|
-| `AGENT_AGENT_FIXTURE_BOT_TOKEN` | `_FixtureBotClient` | Create/delete repos on the bot account |
-| `GITHUB_TOKEN` | Agent under test (`GitHubClient`) | Read repo, create branches, open PRs |
-| `ANTHROPIC_API_KEY` | Agent SDK | Run Claude agents |
+| `GITHUB_TOKEN` | `_FixtureBotClient` and `GitHubClient` | Create/delete repos on the bot account; read repo, create branches, open PRs |
 
-Missing `AGENT_AGENT_FIXTURE_BOT_TOKEN` → skip (fixture infrastructure unavailable).
-Missing `GITHUB_TOKEN` or `ANTHROPIC_API_KEY` → test fails (agent execution failed). This distinction is intentional.
+The SDK uses claude CLI credentials (`~/.claude/`), not `ANTHROPIC_API_KEY`. Ensure the
+`claude` CLI is authenticated with a Max plan account before running SDK tests.
+
+Missing `GITHUB_TOKEN` → skip (fixture infrastructure unavailable).
+Missing claude CLI auth → test fails (agent execution failed). This distinction is intentional.
 
 ### Parametrize strategy
 
@@ -286,8 +287,8 @@ Methods:
 [tool.pytest.ini_options]
 markers = [
     "github: tests requiring GITHUB_TOKEN",
-    "sdk: tests requiring ANTHROPIC_API_KEY",
-    "integration: end-to-end tests requiring AGENT_AGENT_FIXTURE_BOT_TOKEN + GITHUB_TOKEN + ANTHROPIC_API_KEY",
+    "sdk: tests requiring claude CLI auth (Max plan; unset CLAUDECODE first)",
+    "integration: end-to-end tests requiring GITHUB_TOKEN + claude CLI auth",
 ]
 addopts = "-m 'not integration'"
 ```
@@ -318,7 +319,7 @@ Tests read `request.param.complexity` and set the timeout dynamically.
 Before the first integration test run:
 1. Create a dedicated GitHub bot account (e.g. `agent-agent-fixture-bot`)
 2. Generate a PAT with `repo` and `delete_repo` scopes
-3. Store as `AGENT_AGENT_FIXTURE_BOT_TOKEN` in `.env`
+3. Store as `GITHUB_TOKEN` in `.env`
 
 No org required. All ephemeral repos are created under the bot account directly.
 
@@ -341,7 +342,7 @@ No org required. All ephemeral repos are created under the bot account directly.
 
 ## 13. Open Questions
 
-- **Bot account username:** The bot account name (used in repo URLs) must be known at implementation time. It is read from the GitHub API (`GET /user`) using `AGENT_AGENT_FIXTURE_BOT_TOKEN` at the start of the session — not hardcoded.
+- **Bot account username:** The bot account name (used in repo URLs) must be known at implementation time. It is read from the GitHub API (`GET /user`) using `GITHUB_TOKEN` at the start of the session — not hardcoded.
 - **Shallow clone:** Full clone used for correctness. If fixture repos grow large, switch to `shutil.copytree` from a vendored snapshot (see §7 Step 2).
 - **Stale repos from very old sessions:** The `aaf-` prefix makes it easy to bulk-delete stale repos via `gh repo list <bot_username> --json name | jq '.[] | select(.name | startswith("aaf-"))' | xargs gh repo delete`. Document this as a periodic maintenance command.
 - **Synthetic issues:** `merged_from` is metadata only; no special handling needed in the fixture machinery.

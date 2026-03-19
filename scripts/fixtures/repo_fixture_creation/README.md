@@ -26,7 +26,7 @@ pinned SHA on demand; nothing is vendored.
 
 ```bash
 export TARGET_REPO=<owner/repo>                       # for steps 1–2
-export AGENT_AGENT_FIXTURE_BOT_TOKEN=<github-token>   # for step 1
+export GITHUB_TOKEN=<github-token>   # for step 1
 ```
 
 ---
@@ -37,7 +37,7 @@ Run this once before invoking any agent. Exits immediately if the repo is inelig
 
 ```bash
 TARGET_REPO=<owner/repo> \
-AGENT_AGENT_FIXTURE_BOT_TOKEN=$AGENT_AGENT_FIXTURE_BOT_TOKEN \
+GITHUB_TOKEN=$GITHUB_TOKEN \
   ./scripts/fixtures/repo_fixture_creation/01_verify_eligibility.sh
 ```
 

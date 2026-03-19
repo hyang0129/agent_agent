@@ -44,11 +44,13 @@ infrastructure tests, and vice versa.
 
 | Variable | Used by | Absence behavior |
 |----------|---------|-----------------|
-| `AGENT_AGENT_FIXTURE_BOT_TOKEN` | `_FixtureBotClient` — creates/deletes repos on the bot account | Tests are **skipped** |
-| `GITHUB_TOKEN` | Agent under test — reads repos, creates branches, opens PRs | Tests **fail** |
-| `ANTHROPIC_API_KEY` | Agent SDK — runs Claude agents | Tests **fail** |
+| `GITHUB_TOKEN` | `_FixtureBotClient` and agent under test — creates/deletes repos, reads repos, creates branches, opens PRs | Tests are **skipped** |
 
-Store all three in `.env` at the repo root. Load with `set -a && source .env && set +a`.
+Store in `.env` at the repo root. Load with `set -a && source .env && set +a`.
+
+> **SDK auth uses claude CLI credentials, not `ANTHROPIC_API_KEY`.** The SDK spawns a
+> `claude` subprocess authenticated via `~/.claude/`. Ensure the `claude` CLI is
+> authenticated with a Max plan account. Missing claude CLI auth → tests **fail**.
 
 The distinction is intentional: a missing bot token means fixture infrastructure is
 unavailable (skip gracefully); missing agent credentials means the agent failed to run
@@ -153,7 +155,7 @@ Follow the 3-step runbook in
 **Step 1 — Verify eligibility (shell script)**
 ```bash
 TARGET_REPO=owner/repo \
-AGENT_AGENT_FIXTURE_BOT_TOKEN=$AGENT_AGENT_FIXTURE_BOT_TOKEN \
+GITHUB_TOKEN=$GITHUB_TOKEN \
   ./scripts/fixtures/repo_fixture_creation/01_verify_eligibility.sh
 ```
 Checks: permissive license, Python-only language, no vendored dependency trees.
@@ -200,7 +202,7 @@ Before running any integration tests:
 
 1. Create a dedicated GitHub bot account (e.g. `agent-agent-fixture-bot`)
 2. Generate a PAT with `repo` and `delete_repo` scopes
-3. Add to `.env`: `AGENT_AGENT_FIXTURE_BOT_TOKEN=<token>`
+3. Add to `.env`: `GITHUB_TOKEN=<token>`
 
 No org is required. All ephemeral repos are created under the bot account directly as public
 repos.

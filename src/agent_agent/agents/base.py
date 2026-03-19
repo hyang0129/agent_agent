@@ -92,7 +92,7 @@ def serialize_node_context(ctx: NodeContext, role_hint: str) -> str:
     # 2. Repository context (always verbatim) [P5.3]
     sections.append(
         f"## Repository\n\n"
-        f"Path: {ctx.repo_metadata.path}\n"
+        f"Root directory (this is a directory — use Glob to explore files, not Read): {ctx.repo_metadata.path}\n"
         f"Default branch: {ctx.repo_metadata.default_branch}\n"
         f"Language: {ctx.repo_metadata.language or 'unknown'}\n"
         f"Framework: {ctx.repo_metadata.framework or 'unknown'}"
@@ -269,6 +269,14 @@ async def invoke_agent(
         prompt_source = _prompt_iter(user_message)
 
         async for message in query(prompt=prompt_source, options=options):
+            _logger.debug(
+                "sdk.turn",
+                dag_run_id=dag_run_id,
+                node_id=node_id,
+                agent=config.name,
+                msg_type=type(message).__name__,
+                msg=str(message)[:2000],
+            )
             if isinstance(message, ResultMessage):
                 result_message = message
 

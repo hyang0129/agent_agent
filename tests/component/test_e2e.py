@@ -3,7 +3,7 @@
 Full run: IssueContext in → branch pushed to bare remote → ReviewOutput.APPROVED
 → DAGRun.COMPLETED.
 
-Markers: @pytest.mark.sdk (requires ANTHROPIC_API_KEY; unset CLAUDECODE first)
+Markers: @pytest.mark.sdk (requires claude CLI auth, Max plan; unset CLAUDECODE first)
 Budget:  $2.00 hard cap
 Model:   claude-haiku-4-5-20251001 (cheapest that supports tools)
 Workers: MAX_WORKERS=1 (serial dispatch)
@@ -53,12 +53,12 @@ def _make_settings(**overrides: Any) -> Settings:
         "port": 19100,
         "plan_use_thinking": False,
         "plan_thinking_budget_tokens": 0,
-        "plan_max_turns": 10,
-        "programmer_max_turns": 10,
-        "test_designer_max_turns": 10,
-        "test_executor_max_turns": 10,
-        "debugger_max_turns": 10,
-        "reviewer_max_turns": 10,
+        "plan_max_turns": 40,
+        "programmer_max_turns": 40,
+        "test_designer_max_turns": 40,
+        "test_executor_max_turns": 40,
+        "debugger_max_turns": 40,
+        "reviewer_max_turns": 40,
     }
     defaults.update(overrides)
     return Settings(**defaults)
@@ -167,6 +167,7 @@ async def state_store() -> StateStore:
 async def test_e2e_happy_path(
     fixture_repo: tuple[Path, Path],
     state_store: StateStore,
+    monkeypatch: pytest.MonkeyPatch,
 ) -> None:
     """Phase 5 gate: issue in → branch out, full composite pipeline.
 
@@ -200,20 +201,19 @@ async def test_e2e_happy_path(
 
     issue_ctx = IssueContext(url=ISSUE_URL, title=ISSUE_TITLE, body=ISSUE_BODY)
 
-    with pytest.MonkeyPatch().context() as mp:
-        mp.setattr(uvicorn, "Server", lambda _cfg: mock_server)
+    monkeypatch.setattr(uvicorn, "Server", lambda _cfg: mock_server)
 
-        orchestrator = Orchestrator(
-            settings=settings,
-            repo_path=str(repo),
-            claude_md_content=(repo / "CLAUDE.md").read_text(),
-            issue_url=ISSUE_URL,
-            state_store=state_store,
-            agent_fn=None,
-            use_composites=True,
-            issue_context=issue_ctx,
-        )
-        branch_name, summary = await orchestrator.run()
+    orchestrator = Orchestrator(
+        settings=settings,
+        repo_path=str(repo),
+        claude_md_content=(repo / "CLAUDE.md").read_text(),
+        issue_url=ISSUE_URL,
+        state_store=state_store,
+        agent_fn=None,
+        use_composites=True,
+        issue_context=issue_ctx,
+    )
+    branch_name, summary = await orchestrator.run()
 
     # A1: non-empty return values
     assert branch_name, f"empty branch_name; summary={summary!r}"

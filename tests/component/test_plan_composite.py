@@ -1,12 +1,12 @@
 """Component tests for PlanComposite — real SDK calls.
 
-These tests require ANTHROPIC_API_KEY and make real Claude API calls.
-Mark with @pytest.mark.sdk so they are skipped in CI without API keys.
+These tests require the claude CLI to be installed and authenticated (Max plan).
+Mark with @pytest.mark.sdk so they are skipped in CI without claude CLI.
 """
 
 from __future__ import annotations
 
-import os
+import shutil
 
 import pytest
 
@@ -29,9 +29,9 @@ from agent_agent.state import StateStore
 pytestmark = pytest.mark.sdk
 
 
-def _skip_without_api_key() -> None:
-    if not os.environ.get("ANTHROPIC_API_KEY"):
-        pytest.skip("ANTHROPIC_API_KEY not set — skipping SDK test")
+def _skip_without_claude_cli() -> None:
+    if shutil.which("claude") is None:
+        pytest.skip("claude CLI not found — skipping SDK test")
 
 
 def _make_settings() -> Settings:
@@ -108,7 +108,7 @@ class TestPlanCompositeSDK:
 
     async def test_l0_plan_returns_valid_plan_output(self, tmp_git_repo: str) -> None:
         """L0 plan: given a simple issue + fixture repo, returns PlanOutput with valid ChildDAGSpec."""
-        _skip_without_api_key()
+        _skip_without_claude_cli()
 
         settings = _make_settings()
         budget = _make_budget()
@@ -131,7 +131,7 @@ class TestPlanCompositeSDK:
 
     async def test_consolidation_plan_with_approved_reviews(self, tmp_git_repo: str) -> None:
         """Consolidation plan: given approved ReviewOutputs, returns PlanOutput with child_dag=None."""
-        _skip_without_api_key()
+        _skip_without_claude_cli()
 
         settings = _make_settings()
         budget = _make_budget()
@@ -152,7 +152,7 @@ class TestPlanCompositeSDK:
 
     async def test_plan_output_contains_discoveries(self, tmp_git_repo: str) -> None:
         """PlanOutput.discoveries contains at least one discovery (smoke test)."""
-        _skip_without_api_key()
+        _skip_without_claude_cli()
 
         settings = _make_settings()
         budget = _make_budget()
@@ -186,7 +186,7 @@ class TestDiscoveryWriteThrough:
 
     async def test_discovery_write_through_to_state_store(self, tmp_git_repo: str) -> None:
         """Test 3 (SDK): Real PlanComposite + real StateStore; discoveries must persist."""
-        _skip_without_api_key()
+        _skip_without_claude_cli()
 
         settings = _make_settings()
         budget = _make_budget()

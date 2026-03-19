@@ -130,11 +130,15 @@ This prevents dev experiments from corrupting production state and vice versa.
 
 ### 5. Secret Management
 
-Secrets (`ANTHROPIC_API_KEY`, `GITHUB_TOKEN`) should never be in committed files:
+Secrets (`GITHUB_TOKEN`) should never be in committed files:
 
 - In `.env.local` (gitignored) for local development
 - In environment variables for CI/CD
 - In a secret manager (AWS SSM, Vault, 1Password CLI) for production
+
+> **SDK auth uses claude CLI credentials, not `ANTHROPIC_API_KEY`.** The SDK spawns a
+> `claude` subprocess authenticated via `~/.claude/`. Do not add `ANTHROPIC_API_KEY` to
+> secret stores for this project — if set, it overrides Max plan auth.
 
 The committed `.env.dev` and `.env.prod` files contain only non-sensitive defaults.
 

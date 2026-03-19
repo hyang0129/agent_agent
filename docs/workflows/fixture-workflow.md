@@ -16,7 +16,7 @@ The scripts are the authoritative reference for exact commands; this document is
 | Requirement | Notes |
 |-------------|-------|
 | `TARGET_REPO` env var | `<owner/repo>`, e.g. `dbader/schedule` — used by steps 1–2 |
-| `AGENT_AGENT_FIXTURE_BOT_TOKEN` env var | GitHub token for API calls |
+| `GITHUB_TOKEN` env var | GitHub token for API calls |
 | `gh` CLI 2.40+ | Used by step 1 |
 | `jq` 1.6+ | Used by step 1 |
 

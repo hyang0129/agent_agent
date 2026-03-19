@@ -7,8 +7,8 @@ from __future__ import annotations
 
 
 def plan_allowed_tools() -> list[str]:
-    """ResearchPlannerOrchestrator: read-only [P3.3]."""
-    return ["Read", "Glob", "Grep", "Bash"]
+    """ResearchPlannerOrchestrator: read-only, no execution [P3.3]."""
+    return ["Read", "Glob", "Grep"]
 
 
 def programmer_allowed_tools() -> list[str]:
@@ -32,5 +32,5 @@ def debugger_allowed_tools() -> list[str]:
 
 
 def reviewer_allowed_tools() -> list[str]:
-    """Reviewer: read-only [P3.3]."""
-    return ["Read", "Glob", "Grep", "Bash"]
+    """Reviewer: read-only, no execution [P3.3]."""
+    return ["Read", "Glob", "Grep"]

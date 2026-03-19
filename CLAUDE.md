@@ -49,20 +49,24 @@ See [docs/setup.md](docs/setup.md) for prerequisites, install steps, and environ
 
 ## Environment Variables
 
-**All credentials live in `.env` at the repo root.** Before asking for a key or assuming one is missing, check `.env` first.
+**Only one credential lives in `.env` at the repo root.**
 
 | Variable | Used for |
 |----------|----------|
-| `ANTHROPIC_API_KEY` | SDK tests (`@pytest.mark.sdk`), running composites |
 | `GITHUB_TOKEN` | GitHub API tests (`@pytest.mark.github`) |
 
-`.env` is gitignored and never committed. Load it with `set -a && source .env && set +a` or let `pydantic-settings` pick it up automatically (it reads `.env` by default).
+`.env` is gitignored and never committed.
 
-> **Running SDK tests from inside a Claude Code session:** The `CLAUDECODE` env var is set by Claude Code and blocks nested SDK calls. Always unset it before running SDK tests:
+> **SDK tests use the claude CLI (Max plan), not `ANTHROPIC_API_KEY`.**
+> The SDK spawns a `claude` subprocess authenticated via `~/.claude/` credentials.
+> Do NOT set `ANTHROPIC_API_KEY` in `.env` — if present in the environment, it overrides
+> Max plan auth and routes calls through the pay-per-token API instead.
+>
+> **Running SDK tests from inside a Claude Code session:** The `CLAUDECODE` env var blocks
+> nested SDK calls. Always unset it before running SDK tests:
 > ```bash
 > unset CLAUDECODE && pytest tests/ -m sdk -v
 > ```
-> This only affects the bash subprocess — it does not affect the Claude Code session you're working in.
 
 ## Commands
 
@@ -70,7 +74,7 @@ See [docs/setup.md](docs/setup.md) for prerequisites, install steps, and environ
 source /workspaces/.venvs/agent_agent/bin/activate  # activate venv
 AGENT_AGENT_ENV=dev uvicorn agent_agent.server:app --reload --port 8100  # run server
 pytest tests/          # tests
-pytest tests/ -m sdk   # SDK tests (requires ANTHROPIC_API_KEY in .env)
+pytest tests/ -m sdk   # SDK tests (requires claude CLI auth, unset CLAUDECODE first)
 mypy src/agent_agent/  # type check
 ruff check src/ tests/ # lint
 ruff format src/ tests/ # format
