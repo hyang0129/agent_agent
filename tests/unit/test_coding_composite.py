@@ -2,6 +2,7 @@
 
 from __future__ import annotations
 
+import json
 import subprocess
 from typing import Any
 from unittest.mock import AsyncMock, MagicMock, patch
@@ -83,6 +84,8 @@ def _make_state_mock() -> AsyncMock:
     state.append_shared_context = AsyncMock()
     state.update_dag_node_status = AsyncMock()
     state.update_dag_node_worktree = AsyncMock()
+    state.list_shared_context_for_node = AsyncMock(return_value=[])
+    state.get_dag_node = AsyncMock(return_value=None)
     return state
 
 
@@ -594,3 +597,294 @@ class TestCodingCompositeGitDiffClean:
             )
 
         assert result.tests_passed is True
+
+
+# ---------------------------------------------------------------------------
+# Resume tests [P10.5]
+# ---------------------------------------------------------------------------
+
+
+def _make_persisted_sub_agent_rows(
+    node_id: str,
+    entries: list[tuple[int, str, dict]],
+) -> list[dict]:
+    """Build mock shared_context rows for resume tests.
+
+    entries: list of (cycle, sub_agent, output_dict) tuples.
+    """
+    rows = []
+    for cycle, sub_agent, output in entries:
+        rows.append({
+            "id": f"{node_id}-cycle{cycle}-{sub_agent}-attempt0",
+            "dag_run_id": "run-1",
+            "source_node_id": node_id,
+            "category": "sub_agent_output",
+            "data": json.dumps({
+                "composite_node_id": node_id,
+                "cycle": cycle,
+                "sub_agent": sub_agent,
+                "output": output,
+            }),
+            "timestamp": f"2026-01-01T00:00:{cycle:02d}",
+        })
+    return rows
+
+
+def _code_output_dict(
+    summary: str = "implemented changes",
+    branch: str = _BRANCH,
+    tests_passed: bool | None = None,
+) -> dict:
+    return _make_code_output(summary=summary, branch=branch, tests_passed=tests_passed).model_dump()
+
+
+def _test_output_dict(passed: bool = True) -> dict:
+    return _make_test_results(passed=passed).model_dump()
+
+
+class TestCodingCompositeResumeFromScratch:
+    """No prior records -> (0, 'programmer', None, None)."""
+
+    @patch("agent_agent.agents.coding.subprocess.run", side_effect=_clean_subprocess_mock)
+    @patch("agent_agent.agents.coding.invoke_agent", new_callable=AsyncMock)
+    async def test_fresh_start(self, mock_invoke: AsyncMock, _mock_sub: MagicMock) -> None:
+        code_out = _make_code_output()
+        test_pass = _make_test_results(passed=True)
+
+        mock_invoke.side_effect = [
+            (code_out, 0.10),
+            (test_pass, 0.05),
+        ]
+
+        state = _make_state_mock()
+        state.list_shared_context_for_node = AsyncMock(return_value=[])
+        state.get_dag_node = AsyncMock(return_value=None)
+
+        composite = _make_composite(state=state)
+        result, total_cost = await composite.execute(
+            node_context=_make_node_context(),
+            dag_run_id="run-1",
+            node_id="code-node",
+        )
+
+        assert result.tests_passed is True
+        assert mock_invoke.call_count == 2  # programmer + tester
+        assert total_cost == pytest.approx(0.15)
+
+
+class TestCodingCompositeResumeFromTester:
+    """Programmer done -> (0, 'tester', code_out, None), only tester invoked."""
+
+    @patch("agent_agent.agents.coding.subprocess.run", side_effect=_clean_subprocess_mock)
+    @patch("agent_agent.agents.coding.invoke_agent", new_callable=AsyncMock)
+    async def test_resume_from_tester(self, mock_invoke: AsyncMock, _mock_sub: MagicMock) -> None:
+        test_pass = _make_test_results(passed=True)
+
+        # Only tester will be invoked
+        mock_invoke.side_effect = [
+            (test_pass, 0.05),
+        ]
+
+        rows = _make_persisted_sub_agent_rows("code-node", [
+            (0, "programmer", _code_output_dict()),
+        ])
+        state = _make_state_mock()
+        state.list_shared_context_for_node = AsyncMock(return_value=rows)
+        state.get_dag_node = AsyncMock(return_value=None)
+
+        composite = _make_composite(state=state)
+        result, total_cost = await composite.execute(
+            node_context=_make_node_context(),
+            dag_run_id="run-1",
+            node_id="code-node",
+        )
+
+        assert result.tests_passed is True
+        assert mock_invoke.call_count == 1  # only tester
+        tester_config = mock_invoke.call_args_list[0].kwargs["config"]
+        assert tester_config.name == "tester"
+
+
+class TestCodingCompositeResumeFromDebugger:
+    """Programmer + tester(failed) done -> (0, 'debugger', ...), only debugger invoked."""
+
+    @patch("agent_agent.agents.coding.subprocess.run", side_effect=_clean_subprocess_mock)
+    @patch("agent_agent.agents.coding.invoke_agent", new_callable=AsyncMock)
+    async def test_resume_from_debugger(self, mock_invoke: AsyncMock, _mock_sub: MagicMock) -> None:
+        debugger_out = _make_code_output(summary="debugger fix")
+        # After debugger, cycle 1 starts fresh: programmer + tester
+        code_out = _make_code_output()
+        test_pass = _make_test_results(passed=True)
+
+        mock_invoke.side_effect = [
+            (debugger_out, 0.08),  # debugger for cycle 0
+            (code_out, 0.10),      # cycle 1: programmer
+            (test_pass, 0.05),     # cycle 1: tester
+        ]
+
+        rows = _make_persisted_sub_agent_rows("code-node", [
+            (0, "programmer", _code_output_dict()),
+            (0, "tester", _test_output_dict(passed=False)),
+        ])
+        state = _make_state_mock()
+        state.list_shared_context_for_node = AsyncMock(return_value=rows)
+        state.get_dag_node = AsyncMock(return_value=None)
+
+        composite = _make_composite(state=state)
+        result, total_cost = await composite.execute(
+            node_context=_make_node_context(),
+            dag_run_id="run-1",
+            node_id="code-node",
+        )
+
+        assert result.tests_passed is True
+        # debugger + programmer + tester = 3
+        assert mock_invoke.call_count == 3
+        debugger_config = mock_invoke.call_args_list[0].kwargs["config"]
+        assert debugger_config.name == "debugger"
+
+
+class TestCodingCompositeResumeFromCycle1:
+    """Full cycle 0 done -> (1, 'programmer', ...), cycle 0 entirely skipped."""
+
+    @patch("agent_agent.agents.coding.subprocess.run", side_effect=_clean_subprocess_mock)
+    @patch("agent_agent.agents.coding.invoke_agent", new_callable=AsyncMock)
+    async def test_resume_from_cycle1(self, mock_invoke: AsyncMock, _mock_sub: MagicMock) -> None:
+        code_out = _make_code_output()
+        test_pass = _make_test_results(passed=True)
+
+        mock_invoke.side_effect = [
+            (code_out, 0.10),   # cycle 1: programmer
+            (test_pass, 0.05),  # cycle 1: tester
+        ]
+
+        rows = _make_persisted_sub_agent_rows("code-node", [
+            (0, "programmer", _code_output_dict()),
+            (0, "tester", _test_output_dict(passed=False)),
+            (0, "debugger", _code_output_dict(summary="debugger fix")),
+        ])
+        state = _make_state_mock()
+        state.list_shared_context_for_node = AsyncMock(return_value=rows)
+        state.get_dag_node = AsyncMock(return_value=None)
+
+        composite = _make_composite(state=state)
+        result, total_cost = await composite.execute(
+            node_context=_make_node_context(),
+            dag_run_id="run-1",
+            node_id="code-node",
+        )
+
+        assert result.tests_passed is True
+        assert mock_invoke.call_count == 2  # only cycle 1: programmer + tester
+
+
+class TestCodingCompositeAllCyclesComplete:
+    """Tester passed -> (MAX_CYCLES, ...), no sub-agents invoked, returns reconstructed output."""
+
+    @patch("agent_agent.agents.coding.subprocess.run", side_effect=_clean_subprocess_mock)
+    @patch("agent_agent.agents.coding.invoke_agent", new_callable=AsyncMock)
+    async def test_all_complete(self, mock_invoke: AsyncMock, _mock_sub: MagicMock) -> None:
+        rows = _make_persisted_sub_agent_rows("code-node", [
+            (0, "programmer", _code_output_dict()),
+            (0, "tester", _test_output_dict(passed=True)),
+        ])
+        state = _make_state_mock()
+        state.list_shared_context_for_node = AsyncMock(return_value=rows)
+        state.get_dag_node = AsyncMock(return_value=None)
+
+        composite = _make_composite(state=state)
+        result, total_cost = await composite.execute(
+            node_context=_make_node_context(),
+            dag_run_id="run-1",
+            node_id="code-node",
+        )
+
+        # No sub-agents should have been invoked
+        assert mock_invoke.call_count == 0
+        # Should return reconstructed output
+        assert result.summary == "implemented changes"
+        assert result.branch_name == _BRANCH
+        assert total_cost == 0.0
+
+
+class TestCodingCompositeWorktreeRestoreSkippedWhenNoPriorOutput:
+    """Fresh start, git fetch not called."""
+
+    @patch("agent_agent.agents.coding.subprocess.run", side_effect=_clean_subprocess_mock)
+    @patch("agent_agent.agents.coding.invoke_agent", new_callable=AsyncMock)
+    async def test_no_restore_on_fresh(self, mock_invoke: AsyncMock, mock_sub: MagicMock) -> None:
+        code_out = _make_code_output()
+        test_pass = _make_test_results(passed=True)
+
+        mock_invoke.side_effect = [
+            (code_out, 0.10),
+            (test_pass, 0.05),
+        ]
+
+        state = _make_state_mock()
+        state.list_shared_context_for_node = AsyncMock(return_value=[])
+        state.get_dag_node = AsyncMock(return_value=None)
+
+        composite = _make_composite(state=state)
+        await composite.execute(
+            node_context=_make_node_context(),
+            dag_run_id="run-1",
+            node_id="code-node",
+        )
+
+        # get_dag_node should NOT have been called (no resume)
+        state.get_dag_node.assert_not_called()
+        # No fetch calls in subprocess
+        fetch_calls = [
+            c for c in mock_sub.call_args_list if "fetch" in str(c)
+        ]
+        assert len(fetch_calls) == 0
+
+
+class TestCodingCompositeInsertOrIgnoreIdempotency:
+    """INSERT OR IGNORE does not raise on duplicate IDs."""
+
+    async def test_duplicate_insert_ignored(self) -> None:
+        from datetime import datetime, timezone
+
+        from agent_agent.models.dag import DAGRun
+        from agent_agent.state import StateStore
+
+        store = StateStore(":memory:")
+        await store.init()
+        try:
+            # Create a dag_run to satisfy foreign key
+            now = datetime.now(timezone.utc)
+            run = DAGRun(
+                id="run-1",
+                issue_url="https://github.com/org/repo/issues/1",
+                repo_path="/tmp/repo",
+                status="running",
+                budget_usd=5.0,
+                created_at=now,
+                updated_at=now,
+            )
+            await store.create_dag_run(run)
+
+            await store.append_shared_context(
+                entry_id="dup-1",
+                dag_run_id="run-1",
+                source_node_id="node-1",
+                category="sub_agent_output",
+                data={"key": "value1"},
+            )
+            # Second insert with same ID should NOT raise
+            await store.append_shared_context(
+                entry_id="dup-1",
+                dag_run_id="run-1",
+                source_node_id="node-1",
+                category="sub_agent_output",
+                data={"key": "value2"},
+            )
+            # Should still have only one row with original data
+            rows = await store.list_shared_context("run-1")
+            assert len(rows) == 1
+            data = json.loads(rows[0]["data"])
+            assert data["key"] == "value1"  # original kept, duplicate ignored
+        finally:
+            await store.close()

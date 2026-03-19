@@ -305,7 +305,7 @@ class StateStore:
         data: dict,  # type: ignore[type-arg]
     ) -> None:
         await self._db.execute(
-            """INSERT INTO shared_context
+            """INSERT OR IGNORE INTO shared_context
                (id, dag_run_id, source_node_id, category, data, timestamp)
                VALUES (?,?,?,?,?,?)""",
             (entry_id, dag_run_id, source_node_id, category, json.dumps(data), _now()),
@@ -316,6 +316,17 @@ class StateStore:
         async with self._db.execute(
             "SELECT * FROM shared_context WHERE dag_run_id=? ORDER BY timestamp",
             (run_id,),
+        ) as cur:
+            rows = await cur.fetchall()
+        return [dict(r) for r in rows]
+
+    async def list_shared_context_for_node(
+        self, dag_run_id: str, source_node_id: str
+    ) -> list[dict]:  # type: ignore[type-arg]
+        """Return shared context rows scoped by dag_run_id AND source_node_id."""
+        async with self._db.execute(
+            "SELECT * FROM shared_context WHERE dag_run_id=? AND source_node_id=? ORDER BY timestamp ASC",
+            (dag_run_id, source_node_id),
         ) as cur:
             rows = await cur.fetchall()
         return [dict(r) for r in rows]
