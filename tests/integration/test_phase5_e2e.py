@@ -1,8 +1,7 @@
 """Phase 5 end-to-end integration tests against real GitHub fixture repos.
 
-Tests the full orchestrator (use_composites=True) on 2 easy-tier schema issues:
-  - schema-and-or-type-annotation: wrong type annotations on And/Or constructors
-  - schema-or-dict-format-error: KeyError when raw dict is passed to Or with error=
+Tests the full orchestrator (use_composites=True) across all complexity tiers.
+Parametrized over the approved fixture catalog at tests/fixtures/*.json.
 
 Each test:
   1. fixture_repo creates an ephemeral GitHub repo at the pre-fix base_sha + posts the issue.
@@ -14,10 +13,14 @@ Markers:
   integration — requires GITHUB_TOKEN
   sdk         — requires claude CLI auth (Max plan); unset CLAUDECODE before running
 
-Run:
+Run all tiers:
     set -a && source .env && set +a
     unset CLAUDECODE
-    pytest tests/integration/test_phase5_e2e.py -m "integration and sdk" -v --timeout=600
+    pytest tests/integration/test_phase5_e2e.py -m "integration and sdk" -v
+
+Run by tier:
+    pytest tests/integration/test_phase5_e2e.py -k easy -m "integration and sdk" -v
+    pytest tests/integration/test_phase5_e2e.py -k medium -m "integration and sdk" -v -n 2
 """
 
 from __future__ import annotations
@@ -42,8 +45,8 @@ from agent_agent.state import StateStore
 from tests.integration.conftest import load_all_fixtures
 
 
-# Only easy-tier fixtures — quick to run, single-file changes, clear acceptance criteria.
 _EASY_FIXTURES = [f for f in load_all_fixtures() if f.complexity == "easy"]
+_MEDIUM_FIXTURES = [f for f in load_all_fixtures() if f.complexity == "medium"]
 
 _GIT_ENV = {
     **os.environ,
@@ -242,6 +245,127 @@ async def test_phase5_schema_issue_resolution(
         )
 
         # A6: PR was opened on the ephemeral GitHub remote
+        token = os.environ.get("GITHUB_TOKEN", "")
+        headers = {"X-GitHub-Api-Version": "2022-11-28"}
+        if token:
+            headers["Authorization"] = f"Bearer {token}"
+        prs = httpx.get(
+            f"https://api.github.com/repos/{repo_path_part}/pulls",
+            params={"state": "open", "head": branch_name},
+            headers=headers,
+            timeout=30,
+        )
+        prs.raise_for_status()
+        assert prs.json(), f"No open PR found for branch {branch_name!r} on {repo_path_part}"
+
+    finally:
+        await state_store.close()
+
+
+@pytest.mark.integration
+@pytest.mark.sdk
+@pytest.mark.timeout(1800)  # 30 min — medium fixtures require reading 2-4 files, more turns
+@pytest.mark.parametrize(
+    "fixture_repo",
+    _MEDIUM_FIXTURES,
+    indirect=True,
+    ids=lambda m: m.fixture_id,
+)
+async def test_phase5_medium_issue_resolution(
+    fixture_repo: tuple[str, int],
+    tmp_path: Path,
+    monkeypatch: pytest.MonkeyPatch,
+    run_artifact_dir: Path,
+) -> None:
+    """Phase 5 medium-tier gate: resolve a medium-complexity issue end-to-end.
+
+    Same assertions as the easy-tier test; separated to apply a longer timeout
+    appropriate for issues requiring 3-5 file changes and 30-100 LOC delta.
+    """
+    repo_url, issue_number = fixture_repo
+    repo_path_part = repo_url.removeprefix("https://github.com/")
+
+    clone_dir = run_artifact_dir / "repo"
+    subprocess.run(
+        ["git", "clone", repo_url, str(clone_dir)],
+        check=True,
+        capture_output=True,
+        env=_GIT_ENV,
+    )
+    for cfg_key, cfg_val in [("user.email", "agent@agent-agent"), ("user.name", "Agent Agent")]:
+        subprocess.run(
+            ["git", "config", cfg_key, cfg_val],
+            cwd=clone_dir,
+            check=True,
+            capture_output=True,
+        )
+
+    issue_data = _fetch_issue(repo_path_part, issue_number)
+    issue_url = f"{repo_url}/issues/{issue_number}"
+    issue_ctx = IssueContext(
+        url=issue_url,
+        title=issue_data["title"],
+        body=issue_data["body"],
+    )
+
+    claude_md = (clone_dir / "CLAUDE.md").read_text() if (clone_dir / "CLAUDE.md").exists() else ""
+
+    worktree_base = str(run_artifact_dir / "worktrees")
+    Path(worktree_base).mkdir(parents=True, exist_ok=True)
+
+    settings = _make_settings(worktree_base=worktree_base, port=_get_free_port())
+
+    state_store = StateStore(str(run_artifact_dir / "state.db"))
+    await state_store.init()
+
+    run_id_holder: list[str] = []
+    _orig_create = state_store.create_dag_run
+
+    async def _capturing_create(run: Any) -> None:
+        run_id_holder.append(run.id)
+        return await _orig_create(run)
+
+    state_store.create_dag_run = _capturing_create  # type: ignore[method-assign]
+
+    mock_server = MagicMock()
+    mock_server.should_exit = False
+    mock_server.serve = AsyncMock(return_value=None)
+    monkeypatch.setattr(uvicorn, "Server", lambda _cfg: mock_server)
+
+    try:
+        orchestrator = Orchestrator(
+            settings=settings,
+            repo_path=str(clone_dir),
+            claude_md_content=claude_md,
+            issue_url=issue_url,
+            state_store=state_store,
+            use_composites=True,
+            issue_context=issue_ctx,
+        )
+        branch_name, summary = await orchestrator.run()
+
+        assert branch_name, f"empty branch_name; summary={summary!r}"
+        assert summary, f"empty summary; branch={branch_name!r}"
+        assert branch_name.startswith("agent"), f"branch {branch_name!r} must start with 'agent'"
+
+        remote_heads = subprocess.run(
+            ["git", "ls-remote", "--heads", repo_url],
+            capture_output=True,
+            text=True,
+            check=True,
+        ).stdout
+        assert any(
+            segment in remote_heads for segment in [branch_name, branch_name.split("/")[-1]]
+        ), f"Branch {branch_name!r} not found on remote.\nRemote heads:\n{remote_heads}"
+
+        assert run_id_holder, "create_dag_run was never called"
+        dag_run = await state_store.get_dag_run(run_id_holder[0])
+        assert dag_run is not None
+        assert dag_run.status == DAGRunStatus.COMPLETED, f"Expected COMPLETED, got {dag_run.status}"
+        assert 0 < dag_run.usd_used <= settings.max_budget_usd, (
+            f"usd_used={dag_run.usd_used!r} out of range (0, {settings.max_budget_usd}]"
+        )
+
         token = os.environ.get("GITHUB_TOKEN", "")
         headers = {"X-GitHub-Api-Version": "2022-11-28"}
         if token:
