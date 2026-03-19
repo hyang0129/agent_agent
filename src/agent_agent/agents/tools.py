@@ -16,13 +16,8 @@ def programmer_allowed_tools() -> list[str]:
     return ["Read", "Glob", "Grep", "Write", "Edit", "Bash"]
 
 
-def test_designer_allowed_tools() -> list[str]:
-    """Test Designer: read-only [P3.3]."""
-    return ["Read", "Glob", "Grep", "Bash"]
-
-
-def test_executor_allowed_tools() -> list[str]:
-    """Test Executor: read + run tests [P3.3]."""
+def tester_allowed_tools() -> list[str]:
+    """Tester: read + write + run tests [P3.3]."""
     return ["Read", "Glob", "Grep", "Write", "Edit", "Bash"]
 
 

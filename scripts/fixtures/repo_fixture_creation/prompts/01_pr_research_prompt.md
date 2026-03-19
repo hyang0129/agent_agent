@@ -6,11 +6,11 @@ Substitute `{{TARGET_REPO}}` with the actual repo before invoking this prompt.
 
 ---
 
-You are a research agent. Search `{{TARGET_REPO}}` on GitHub and identify **5 merged pull
+You are a research agent. Search `{{TARGET_REPO}}` on GitHub and identify **10 merged pull
 requests** that each fixed exactly one issue. These become integration test fixture assets
 for the agent_agent evaluation harness.
 
-Produce 5 entries in `staging/<repo-slug>.json`, where `<repo-slug>` is the last
+Produce 10 entries in `staging/<repo-slug>.json`, where `<repo-slug>` is the last
 component of `{{TARGET_REPO}}` (e.g. `staging/schema.json` for `keleshev/schema`).
 Create the file if it does not exist. Do not overwrite or remove any existing entries
 — only append.
@@ -19,7 +19,7 @@ Create the file if it does not exist. Do not overwrite or remove any existing en
 
 ## Complexity Distribution
 
-You must produce exactly: **3 easy, 1 medium, 1 hard**
+You must produce exactly: **3 easy, 3 medium, 4 hard**
 
 | Tier | Source files changed | LOC delta (non-test) | Issue clarity |
 |------|---------------------|----------------------|---------------|
@@ -60,9 +60,9 @@ Maintain three pools and their targets:
 
 | Pool | Target | Can exceed? |
 |------|--------|-------------|
-| easy | 2 | Yes — stop adding once you have 2+, but don't discard extras |
-| medium | 2 | Yes |
-| hard | 1 | Yes |
+| easy | 3 | Yes — stop adding once you have 3+, but don't discard extras |
+| medium | 3 | Yes |
+| hard | 4 | Yes |
 
 Processing stops when all three pools are at or above their targets.
 
@@ -104,7 +104,7 @@ gh pr view <number> --repo {{TARGET_REPO}} --json files,additions,deletions
 Classify the PR as `easy`, `medium`, or `hard` using the complexity table at the top of
 this prompt (source files changed + non-test LOC delta).
 
-**If the pool for this complexity already has 2+ (easy/medium) or 1+ (hard) accepted
+**If the pool for this complexity already has 3+ (easy/medium) or 4+ (hard) accepted
 entries at dispatch time:** return `skip: "pool full for <tier>"`. Do not proceed to
 Check 2.
 
@@ -279,7 +279,7 @@ This working note is what flows directly into the output JSON — no further mod
 
 ## Output
 
-Append 5 entries to `staging/<repo-slug>.json` (e.g. `staging/schema.json`), creating
+Append 10 entries to `staging/<repo-slug>.json` (e.g. `staging/schema.json`), creating
 it as a JSON array if it does not exist.
 
 ```json
@@ -309,8 +309,8 @@ it as a JSON array if it does not exist.
 | `synthetic_issue` | `false` for real single-issue fixtures; `true` if Step 3b merged two issues |
 | `merged_from` | Empty array normally; `[N, M]` if two issues were merged |
 
-Final distribution check before writing: confirm you have 3 easy, 1 medium, 1 hard.
-All 5 entries must have different `pr_number` and different `issue_number`.
+Final distribution check before writing: confirm you have 3 easy, 3 medium, 4 hard.
+All 10 entries must have different `pr_number` and different `issue_number`.
 
 ---
 

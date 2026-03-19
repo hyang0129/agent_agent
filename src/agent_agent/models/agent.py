@@ -103,6 +103,7 @@ class CodeOutput(BaseModel):
 class AgentTestRole(str, Enum):
     PLAN = "plan"
     RESULTS = "results"
+    TESTER = "tester"
 
 
 class AgentTestOutput(BaseModel):

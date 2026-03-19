@@ -100,20 +100,12 @@ def _make_code_output(
     )
 
 
-def _make_test_plan_output() -> AgentTestOutput:
-    return AgentTestOutput(
-        type="test",
-        role=AgentTestRole.PLAN,
-        summary="Test plan for changes",
-        test_plan="Run pytest on src/test_main.py",
-    )
-
-
 def _make_test_results(passed: bool = True) -> AgentTestOutput:
     return AgentTestOutput(
         type="test",
-        role=AgentTestRole.RESULTS,
+        role=AgentTestRole.TESTER,
         summary="Tests passed" if passed else "Tests failed",
+        test_plan="Run pytest on the worktree",
         passed=passed,
         total_tests=5,
         failed_tests=0 if passed else 2,
@@ -158,13 +150,11 @@ class TestCodingCompositeOneCycle:
     @patch("agent_agent.agents.coding.invoke_agent", new_callable=AsyncMock)
     async def test_single_cycle_on_pass(self, mock_invoke: AsyncMock, _mock_sub: MagicMock) -> None:
         code_out = _make_code_output()
-        test_plan = _make_test_plan_output()
         test_results = _make_test_results(passed=True)
 
         mock_invoke.side_effect = [
             (code_out, 0.10),  # programmer
-            (test_plan, 0.03),  # test_designer
-            (test_results, 0.05),  # test_executor
+            (test_results, 0.05),  # tester
         ]
 
         composite = _make_composite()
@@ -176,8 +166,8 @@ class TestCodingCompositeOneCycle:
 
         assert result.tests_passed is True
         assert result.branch_name == _BRANCH
-        assert mock_invoke.call_count == 3  # no debugger
-        assert total_cost == pytest.approx(0.18)
+        assert mock_invoke.call_count == 2  # no debugger
+        assert total_cost == pytest.approx(0.15)
 
 
 class TestCodingCompositeMaxCycles:
@@ -189,17 +179,15 @@ class TestCodingCompositeMaxCycles:
         self, mock_invoke: AsyncMock, _mock_sub: MagicMock
     ) -> None:
         code_out = _make_code_output()
-        test_plan = _make_test_plan_output()
         test_fail = _make_test_results(passed=False)
         debugger_out = _make_code_output(summary="debugger fix")
 
-        # 3 cycles: each has Programmer + TestDesigner + TestExecutor
+        # 3 cycles: each has Programmer + Tester
         # Cycles 0 and 1 also get Debugger (cycle 2 is last, no debugger)
         side_effects = []
         for cycle in range(MAX_CYCLES):
             side_effects.append((code_out, 0.10))  # programmer
-            side_effects.append((test_plan, 0.03))  # test_designer
-            side_effects.append((test_fail, 0.05))  # test_executor
+            side_effects.append((test_fail, 0.05))  # tester
             if cycle + 1 < MAX_CYCLES:
                 side_effects.append((debugger_out, 0.08))  # debugger
 
@@ -213,8 +201,8 @@ class TestCodingCompositeMaxCycles:
         )
 
         assert result.tests_passed is False
-        # 3 * (programmer + test_designer + test_executor) + 2 debugger = 11
-        assert mock_invoke.call_count == 11
+        # 3 * (programmer + tester) + 2 debugger = 8
+        assert mock_invoke.call_count == 8
 
 
 class TestCodingCompositeSkipsDebuggerLastCycle:
@@ -226,14 +214,12 @@ class TestCodingCompositeSkipsDebuggerLastCycle:
         self, mock_invoke: AsyncMock, _mock_sub: MagicMock
     ) -> None:
         code_out = _make_code_output()
-        test_plan = _make_test_plan_output()
         test_fail = _make_test_results(passed=False)
         debugger_out = _make_code_output(summary="debugger fix")
 
         side_effects = []
         for cycle in range(MAX_CYCLES):
             side_effects.append((code_out, 0.10))
-            side_effects.append((test_plan, 0.03))
             side_effects.append((test_fail, 0.05))
             if cycle + 1 < MAX_CYCLES:
                 side_effects.append((debugger_out, 0.08))
@@ -248,11 +234,11 @@ class TestCodingCompositeSkipsDebuggerLastCycle:
         )
 
         # Verify the last cycle's calls don't include debugger
-        # Last 3 calls should be: programmer, test_designer, test_executor (no debugger)
-        last_three_configs = [
-            call.kwargs["config"].name for call in mock_invoke.call_args_list[-3:]
+        # Last 2 calls should be: programmer, tester (no debugger)
+        last_two_configs = [
+            call.kwargs["config"].name for call in mock_invoke.call_args_list[-2:]
         ]
-        assert last_three_configs == ["programmer", "test_designer", "test_executor"]
+        assert last_two_configs == ["programmer", "tester"]
 
 
 class TestCodingCompositePushOnExit:
@@ -285,12 +271,10 @@ class TestCodingCompositePushSkipped:
     @patch("agent_agent.agents.coding.invoke_agent", new_callable=AsyncMock)
     async def test_push_skipped(self, mock_invoke: AsyncMock) -> None:
         code_out = _make_code_output()
-        test_plan = _make_test_plan_output()
         test_results = _make_test_results(passed=True)
 
         mock_invoke.side_effect = [
             (code_out, 0.10),
-            (test_plan, 0.03),
             (test_results, 0.05),
         ]
 
@@ -316,12 +300,10 @@ class TestCodingCompositeSubAgentPersistence:
     @patch("agent_agent.agents.coding.invoke_agent", new_callable=AsyncMock)
     async def test_outputs_persisted(self, mock_invoke: AsyncMock, _mock_sub: MagicMock) -> None:
         code_out = _make_code_output()
-        test_plan = _make_test_plan_output()
         test_results = _make_test_results(passed=True)
 
         mock_invoke.side_effect = [
             (code_out, 0.10),
-            (test_plan, 0.03),
             (test_results, 0.05),
         ]
 
@@ -334,8 +316,8 @@ class TestCodingCompositeSubAgentPersistence:
             node_id="code-node",
         )
 
-        # 3 persist calls: programmer, test_designer, test_executor
-        assert state.append_shared_context.call_count == 3
+        # 2 persist calls: programmer, tester
+        assert state.append_shared_context.call_count == 2
         categories = [
             call.kwargs["category"] for call in state.append_shared_context.call_args_list
         ]
@@ -351,19 +333,16 @@ class TestCodingCompositeContextAugmentation:
         self, mock_invoke: AsyncMock, _mock_sub: MagicMock
     ) -> None:
         code_out = _make_code_output()
-        test_plan = _make_test_plan_output()
         test_fail = _make_test_results(passed=False)
         debugger_out = _make_code_output(summary="debugger fix")
         test_pass = _make_test_results(passed=True)
 
         mock_invoke.side_effect = [
-            (code_out, 0.10),  # cycle 0: programmer
-            (test_plan, 0.03),  # cycle 0: test_designer
-            (test_fail, 0.05),  # cycle 0: test_executor
+            (code_out, 0.10),    # cycle 0: programmer
+            (test_fail, 0.05),   # cycle 0: tester
             (debugger_out, 0.08),  # cycle 0: debugger
-            (code_out, 0.10),  # cycle 1: programmer
-            (test_plan, 0.03),  # cycle 1: test_designer
-            (test_pass, 0.05),  # cycle 1: test_executor
+            (code_out, 0.10),    # cycle 1: programmer
+            (test_pass, 0.05),   # cycle 1: tester
         ]
 
         composite = _make_composite()
@@ -373,8 +352,8 @@ class TestCodingCompositeContextAugmentation:
             node_id="code-node",
         )
 
-        # The cycle 1 programmer call (5th call, index 4) should have augmented context
-        cycle1_programmer_call = mock_invoke.call_args_list[4]
+        # The cycle 1 programmer call (4th call, index 3) should have augmented context
+        cycle1_programmer_call = mock_invoke.call_args_list[3]
         ctx = cycle1_programmer_call.kwargs["node_context"]
         assert "prev-cycle-0-test" in ctx.parent_outputs
 
@@ -386,12 +365,10 @@ class TestCodingCompositeProgrammerConfig:
     @patch("agent_agent.agents.coding.invoke_agent", new_callable=AsyncMock)
     async def test_programmer_config(self, mock_invoke: AsyncMock, _mock_sub: MagicMock) -> None:
         code_out = _make_code_output()
-        test_plan = _make_test_plan_output()
         test_results = _make_test_results(passed=True)
 
         mock_invoke.side_effect = [
             (code_out, 0.10),
-            (test_plan, 0.03),
             (test_results, 0.05),
         ]
 
@@ -412,19 +389,17 @@ class TestCodingCompositeProgrammerConfig:
         assert "Write" in programmer_config.allowed_tools
 
 
-class TestCodingCompositeTestDesignerConfig:
-    """Test 9: Test Designer config: max_turns from settings, read-only."""
+class TestCodingCompositeTesterConfig:
+    """Test 9: Tester config: max_turns from settings, write tools."""
 
     @patch("agent_agent.agents.coding.subprocess.run", side_effect=_clean_subprocess_mock)
     @patch("agent_agent.agents.coding.invoke_agent", new_callable=AsyncMock)
-    async def test_test_designer_config(self, mock_invoke: AsyncMock, _mock_sub: MagicMock) -> None:
+    async def test_tester_config(self, mock_invoke: AsyncMock, _mock_sub: MagicMock) -> None:
         code_out = _make_code_output()
-        test_plan = _make_test_plan_output()
         test_results = _make_test_results(passed=True)
 
         mock_invoke.side_effect = [
             (code_out, 0.10),
-            (test_plan, 0.03),
             (test_results, 0.05),
         ]
 
@@ -435,66 +410,34 @@ class TestCodingCompositeTestDesignerConfig:
             node_id="code-node",
         )
 
-        td_config = mock_invoke.call_args_list[1].kwargs["config"]
-        assert td_config.name == "test_designer"
-        assert td_config.max_turns == _make_settings().test_designer_max_turns
+        tester_config = mock_invoke.call_args_list[1].kwargs["config"]
+        assert tester_config.name == "tester"
+        assert tester_config.max_turns == _make_settings().tester_max_turns
 
-        assert "Edit" not in td_config.allowed_tools
-        assert "Write" not in td_config.allowed_tools
-
-
-class TestCodingCompositeTestExecutorConfig:
-    """Test 10: Test Executor config: max_turns from settings, test execution tools."""
-
-    @patch("agent_agent.agents.coding.subprocess.run", side_effect=_clean_subprocess_mock)
-    @patch("agent_agent.agents.coding.invoke_agent", new_callable=AsyncMock)
-    async def test_test_executor_config(self, mock_invoke: AsyncMock, _mock_sub: MagicMock) -> None:
-        code_out = _make_code_output()
-        test_plan = _make_test_plan_output()
-        test_results = _make_test_results(passed=True)
-
-        mock_invoke.side_effect = [
-            (code_out, 0.10),
-            (test_plan, 0.03),
-            (test_results, 0.05),
-        ]
-
-        composite = _make_composite()
-        await composite.execute(
-            node_context=_make_node_context(),
-            dag_run_id="run-1",
-            node_id="code-node",
-        )
-
-        te_config = mock_invoke.call_args_list[2].kwargs["config"]
-        assert te_config.name == "test_executor"
-        assert te_config.max_turns == _make_settings().test_executor_max_turns
-
-        assert "Bash" in te_config.allowed_tools
-        assert "Read" in te_config.allowed_tools
+        assert "Write" in tester_config.allowed_tools
+        assert "Edit" in tester_config.allowed_tools
+        assert "Bash" in tester_config.allowed_tools
+        assert "Read" in tester_config.allowed_tools
 
 
 class TestCodingCompositeDebuggerConfig:
-    """Test 11: Debugger config: max_turns from settings, write tools."""
+    """Test 10: Debugger config: max_turns from settings, write tools."""
 
     @patch("agent_agent.agents.coding.subprocess.run", side_effect=_clean_subprocess_mock)
     @patch("agent_agent.agents.coding.invoke_agent", new_callable=AsyncMock)
     async def test_debugger_config(self, mock_invoke: AsyncMock, _mock_sub: MagicMock) -> None:
         code_out = _make_code_output()
-        test_plan = _make_test_plan_output()
         test_fail = _make_test_results(passed=False)
         debugger_out = _make_code_output(summary="debugger fix")
         # Second cycle passes
         test_pass = _make_test_results(passed=True)
 
         mock_invoke.side_effect = [
-            (code_out, 0.10),  # cycle 0: programmer
-            (test_plan, 0.03),  # cycle 0: test_designer
-            (test_fail, 0.05),  # cycle 0: test_executor
+            (code_out, 0.10),    # cycle 0: programmer
+            (test_fail, 0.05),   # cycle 0: tester
             (debugger_out, 0.08),  # cycle 0: debugger
-            (code_out, 0.10),  # cycle 1: programmer
-            (test_plan, 0.03),  # cycle 1: test_designer
-            (test_pass, 0.05),  # cycle 1: test_executor
+            (code_out, 0.10),    # cycle 1: programmer
+            (test_pass, 0.05),   # cycle 1: tester
         ]
 
         composite = _make_composite()
@@ -504,7 +447,7 @@ class TestCodingCompositeDebuggerConfig:
             node_id="code-node",
         )
 
-        dbg_config = mock_invoke.call_args_list[3].kwargs["config"]
+        dbg_config = mock_invoke.call_args_list[2].kwargs["config"]
         assert dbg_config.name == "debugger"
         assert dbg_config.max_turns == _make_settings().debugger_max_turns
         assert dbg_config.output_model is CodeOutput
@@ -514,18 +457,16 @@ class TestCodingCompositeDebuggerConfig:
 
 
 class TestCodingCompositeBranchName:
-    """Test 12: Branch name in output matches worktree.branch."""
+    """Test 11: Branch name in output matches worktree.branch."""
 
     @patch("agent_agent.agents.coding.subprocess.run", side_effect=_clean_subprocess_mock)
     @patch("agent_agent.agents.coding.invoke_agent", new_callable=AsyncMock)
     async def test_branch_name_matches(self, mock_invoke: AsyncMock, _mock_sub: MagicMock) -> None:
         code_out = _make_code_output(branch="some-other-branch")
-        test_plan = _make_test_plan_output()
         test_results = _make_test_results(passed=True)
 
         mock_invoke.side_effect = [
             (code_out, 0.10),
-            (test_plan, 0.03),
             (test_results, 0.05),
         ]
 
@@ -541,17 +482,15 @@ class TestCodingCompositeBranchName:
 
 
 class TestCodingCompositePushFailure:
-    """Test 13: Push failure — verify composite still returns, push logged, state updated."""
+    """Test 12: Push failure — verify composite still returns, push logged, state updated."""
 
     @patch("agent_agent.agents.coding.invoke_agent", new_callable=AsyncMock)
     async def test_push_failure_handled(self, mock_invoke: AsyncMock) -> None:
         code_out = _make_code_output()
-        test_plan = _make_test_plan_output()
         test_results = _make_test_results(passed=True)
 
         mock_invoke.side_effect = [
             (code_out, 0.10),
-            (test_plan, 0.03),
             (test_results, 0.05),
         ]
 
@@ -591,17 +530,15 @@ class TestCodingCompositePushFailure:
 
 
 class TestCodingCompositeGitDiffModified:
-    """Test 14: Post-test git diff returns modified files -> AgentError + revert."""
+    """Test 13: Post-test git diff returns modified files -> AgentError + revert."""
 
     @patch("agent_agent.agents.coding.invoke_agent", new_callable=AsyncMock)
     async def test_git_diff_modified_raises(self, mock_invoke: AsyncMock) -> None:
         code_out = _make_code_output()
-        test_plan = _make_test_plan_output()
         test_results = _make_test_results(passed=True)
 
         mock_invoke.side_effect = [
             (code_out, 0.10),
-            (test_plan, 0.03),
             (test_results, 0.05),
         ]
 
@@ -629,17 +566,15 @@ class TestCodingCompositeGitDiffModified:
 
 
 class TestCodingCompositeGitDiffClean:
-    """Test 15: Post-test git diff returns empty -> no error, cycle continues."""
+    """Test 14: Post-test git diff returns empty -> no error, cycle continues."""
 
     @patch("agent_agent.agents.coding.invoke_agent", new_callable=AsyncMock)
     async def test_git_diff_clean_continues(self, mock_invoke: AsyncMock) -> None:
         code_out = _make_code_output()
-        test_plan = _make_test_plan_output()
         test_results = _make_test_results(passed=True)
 
         mock_invoke.side_effect = [
             (code_out, 0.10),
-            (test_plan, 0.03),
             (test_results, 0.05),
         ]
 
