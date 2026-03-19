@@ -1,6 +1,6 @@
 # Policy 10: Node Execution Model
 
-Each DAG node maps to exactly one agent invocation: the agent receives tools appropriate to its type, runs a tool-use loop bounded by an iteration cap, and returns a typed structured result. Three node types are composite — their internal execution is itself a DAG of sub-agents (Plan composite, Coding composite, Review composite) — but the outer DAG sees only their typed inputs and outputs. The Coding composite's internal structure is a cyclic DAG (Programmer → Test Designer → Test Executor → Debugger, up to 3 cycles), treated as an unrolled DAG with persisted sub-agent outputs so the node resumes from the last completed sub-agent on failure rather than restarting from scratch. Every failure must be classified before deciding a response: Transient (retry with backoff), Agent Error (re-invoke with failure context), Resource Exhaustion (stop and let the next layer handle it), Deterministic (escalate immediately), or Safety Violation (escalate immediately, no retry).
+Each DAG node maps to exactly one agent invocation: the agent receives tools appropriate to its type, runs a tool-use loop bounded by an iteration cap, and returns a typed structured result. Three node types are composite — their internal execution is itself a DAG of sub-agents (Plan composite, Coding composite, Review composite) — but the outer DAG sees only their typed inputs and outputs. The Coding composite's internal structure is a cyclic DAG (Programmer → Tester → Debugger, up to 3 cycles), treated as an unrolled DAG with persisted sub-agent outputs so the node resumes from the last completed sub-agent on failure rather than restarting from scratch. Every failure must be classified before deciding a response: Transient (retry with backoff), Agent Error (re-invoke with failure context), Resource Exhaustion (stop and let the next layer handle it), Deterministic (escalate immediately), or Safety Violation (escalate immediately, no retry).
 
 ---
 
@@ -17,7 +17,7 @@ Agent_agent has three composite nodes:
 | Composite Node | MVP Implementation | Target Architecture |
 |---|---|---|
 | **Plan composite** | Single Planner agent with extended reasoning | Research → Plan → Orchestrate (acyclic internal DAG) |
-| **Coding composite** | 4 agents in a cyclic DAG (Programmer → Test Designer → Test Executor → Debugger) | Same |
+| **Coding composite** | 3 agents in a cyclic DAG (Programmer → Tester → Debugger) | Same |
 | **Review composite** | Single Review agent | Code Reviewer ∥ Policy Reviewer → Merge (acyclic internal DAG with fan-out) |
 
 The DAG nests across levels:
@@ -32,8 +32,7 @@ Every agent invocation is bounded by an iteration cap on its tool-use loop:
 |---|---|
 | Planner (MVP) | 50 |
 | Programmer | 40 |
-| Test Designer | 20 |
-| Test Executor | 15 |
+| Tester | 25 |
 | Debugger | 20 |
 | Review | 20 |
 
@@ -45,10 +44,10 @@ The internal structure of a composite node is a DAG. Collaboration between sub-a
 
 **Coding composite — sequential cycles of linear DAGs:**
 
-The Coding composite runs up to `max_cycles` (default 3) cycles. Each cycle is a 4-node acyclic DAG:
+The Coding composite runs up to `max_cycles` (default 3) cycles. Each cycle is a 3-node acyclic DAG:
 
 ```
-Cycle N:  Programmer → Test Designer → Test Executor → Debugger
+Cycle N:  Programmer → Tester → Debugger
 ```
 
 Cycle continuation is evaluated by the composite after each cycle completes:
@@ -185,7 +184,7 @@ Each Coding composite executes in its own git worktree [P8.3], providing filesys
 |-----------|-------|-------|
 | Composite node types | Plan composite, Coding composite, Review composite | Internal structure opaque to outer DAG |
 | Max Coding composite cycles | 3 | Cycle-cap exhaustion = Resource Exhaustion |
-| Iteration caps | Planner 50, Programmer 40, Test Designer/Debugger 20, Test Executor 15, Review 20 | Hitting cap = Resource Exhaustion |
+| Iteration caps | Planner 50, Programmer 40, Tester 25, Debugger/Review 20 | Hitting cap = Resource Exhaustion |
 | Agent Error re-invocation limit | 1 (all agents) | Per node; see [P10.9] |
 | Transient retry limit | 3 per sub-agent invocation | Then reclassify as Deterministic |
 | Safety violation response | Escalate immediately, no retry | [P6.1d] |

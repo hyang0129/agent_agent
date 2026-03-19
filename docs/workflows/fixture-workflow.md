@@ -73,9 +73,9 @@ The agent produces all 5 entries in a single pass:
 1. Lists merged PRs that close an issue via `gh pr list`.
 2. Classifies candidates by complexity (easy / medium / hard).
 3. Spawns a subagent team (up to 10 in flight at once) to process candidates in
-   parallel into three pools (easy target 2, medium target 2, hard target 1).
+   parallel into three pools (easy target 3, medium target 3, hard target 4).
 4. Each subagent verifies issue resolution and confirms the issue is closed.
-5. Appends 5 entries to `staging/candidate-prs.json`.
+5. Appends 10 entries to `staging/candidate-prs.json`.
 
 ### PR complexity criteria
 
@@ -85,7 +85,7 @@ The agent produces all 5 entries in a single pass:
 | medium | 3–5 | 30–100 | Requires reading 2–4 source files |
 | hard | 4+ | 100+ | Requires architectural exploration |
 
-Distribution: 3 easy, 1 medium, 1 hard.
+Distribution: 3 easy, 3 medium, 4 hard.
 
 ---
 

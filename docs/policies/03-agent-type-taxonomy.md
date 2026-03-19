@@ -14,8 +14,7 @@ These three composites cover the full lifecycle of issue resolution: understand 
 |-----------|-----------|----------------|
 | **Plan composite** | ResearchPlannerOrchestrator | Reads the issue and repo context, produces an investigation summary, and generates the child DAG specification or `null` (work complete). Single invocation; no separate research and planning steps. |
 | **Coding composite** | Programmer | Writes file changes that resolve the assigned sub-task. Handles git within the Coding composite's worktree. |
-| **Coding composite** | Test Designer | Designs the test plan for the Programmer's changes. |
-| **Coding composite** | Test Executor | Runs the test suite and reports results. |
+| **Coding composite** | Tester | Designs the test plan for the Programmer's changes, executes the test suite, and reports results. |
 | **Coding composite** | Debugger | Diagnoses test failures and writes corrective changes. |
 | **Review composite** | Reviewer | Evaluates code quality, correctness, test coverage, and policy compliance across all Coding composite outputs. |
 
@@ -27,8 +26,7 @@ Sub-agents are not interchangeable across composites. The Programmer cannot be i
 |-----------|-----|--------|
 | **ResearchPlannerOrchestrator** | Read files, read GitHub, read git history, DAG plan construction, child DAG spawning | Write files, touch git, create or comment on PRs |
 | **Programmer** | Read files, write files, git operations within worktree | Create or comment on PRs, touch files outside worktree |
-| **Test Designer** | Read files, read test suite | Write source files, run test commands |
-| **Test Executor** | Read files, run test suite commands, write temporary/generated files during test execution | Net-modify source files committed by Programmer (validated post-execution via git diff), git operations |
+| **Tester** | Read files, run test suite commands, write temporary/generated files during test execution | Net-modify source files committed by Programmer (validated post-execution via git diff), git operations |
 | **Debugger** | Read files, write files, git operations within worktree | Create or comment on PRs, touch files outside worktree |
 | **Reviewer** | Read files, read diffs, read git history, read GitHub PRs | Write files, touch git, merge PRs |
 
@@ -81,5 +79,5 @@ Not every DAG requires all three composites at every level. The Plan composite i
 | Composite | Sub-agents | Core Capability | Hard Restriction |
 |-----------|-----------|----------------|-----------------|
 | Plan | ResearchPlannerOrchestrator | Read-only analysis + DAG construction | No file writes, no PR creation |
-| Coding | Programmer, Test Designer, Test Executor, Debugger | Read/write files; run tests; git within worktree | No PR creation or comments outside worktree |
+| Coding | Programmer, Tester, Debugger | Read/write files; run tests; git within worktree | No PR creation or comments outside worktree |
 | Review | Reviewer | Read files, diffs, git history; evaluate quality | No file writes, no git mutations, no merges |
