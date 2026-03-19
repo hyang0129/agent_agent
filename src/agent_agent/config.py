@@ -1,7 +1,10 @@
 from __future__ import annotations
 
 import os
+import sys
 from functools import lru_cache
+from pathlib import Path
+from typing import Any
 
 import structlog
 from pydantic import computed_field
@@ -45,10 +48,10 @@ class Settings(BaseSettings):
 
     # CodingComposite sub-agent turn caps
     programmer_max_turns: int = 100
-    test_designer_max_turns: int = 100
+    test_designer_max_turns: int = 15
     test_executor_max_turns: int = 100
     debugger_max_turns: int = 100
-    reviewer_max_turns: int = 100
+    reviewer_max_turns: int = 20
 
     @computed_field  # type: ignore[prop-decorator]
     @property
@@ -63,7 +66,37 @@ def get_settings() -> Settings:
     return Settings()
 
 
-def configure_logging(settings: Settings | None = None) -> None:
+class _TeeFile:
+    """Write to multiple file-like objects simultaneously."""
+
+    def __init__(self, *files: Any) -> None:
+        self._files = files
+
+    def write(self, data: str) -> int:
+        for f in self._files:
+            f.write(data)
+        return len(data)
+
+    def flush(self) -> None:
+        for f in self._files:
+            f.flush()
+
+
+# Module-level handle so the open file is not garbage-collected between calls.
+_log_file_handle: Any = None
+
+
+def configure_logging(settings: Settings | None = None, log_file: str | None = None) -> None:
+    global _log_file_handle
+
+    # Close any previously opened log file.
+    if _log_file_handle is not None:
+        try:
+            _log_file_handle.close()
+        except Exception:
+            pass
+        _log_file_handle = None
+
     s = settings or get_settings()
     level = s.log_level.upper()
 
@@ -78,10 +111,21 @@ def configure_logging(settings: Settings | None = None) -> None:
     else:
         processors.append(structlog.dev.ConsoleRenderer())
 
+    if log_file is not None:
+        Path(log_file).parent.mkdir(parents=True, exist_ok=True)
+        _log_file_handle = open(log_file, "w", encoding="utf-8")  # noqa: SIM115
+        logger_factory: Any = structlog.WriteLoggerFactory(
+            file=_TeeFile(sys.stdout, _log_file_handle)
+        )
+    else:
+        logger_factory = structlog.PrintLoggerFactory()
+
     structlog.configure(
         processors=processors,
         wrapper_class=structlog.make_filtering_bound_logger(getattr(__import__("logging"), level)),
         context_class=dict,
-        logger_factory=structlog.PrintLoggerFactory(),
-        cache_logger_on_first_use=True,
+        logger_factory=logger_factory,
+        # Disable caching only when a log_file is supplied (i.e. test reconfiguration).
+        # Production calls configure_logging once at startup and benefits from caching.
+        cache_logger_on_first_use=log_file is None,
     )

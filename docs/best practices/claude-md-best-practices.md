@@ -106,7 +106,7 @@ Non-obvious env setup Claude needs to know before running commands.
 ```markdown
 ## Environment
 - Python: `pyenv use 3.11` before running anything
-- Required: ANTHROPIC_API_KEY, DATABASE_URL in .env
+- Required: DATABASE_URL in .env; SDK auth uses claude CLI credentials (~/.claude/), not an API key
 - Build: always cmake -G Ninja, never Make
 ```
 

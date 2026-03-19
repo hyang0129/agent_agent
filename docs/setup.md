@@ -4,7 +4,7 @@
 
 - Python 3.11
 - A GitHub personal access token with `repo` scope
-- An Anthropic API key
+- Claude CLI authenticated with a Max plan account (`~/.claude/` credentials)
 
 ## Install
 
@@ -28,9 +28,12 @@ cp .env.dev .env.dev.local
 Required values in `.env.dev`:
 
 ```
-ANTHROPIC_API_KEY=sk-ant-...
 GITHUB_TOKEN=ghp_...
 ```
+
+> **SDK auth uses claude CLI credentials, not an API key.** The SDK spawns a `claude`
+> subprocess authenticated via `~/.claude/`. Do not set `ANTHROPIC_API_KEY` — if present,
+> it overrides Max plan auth and routes calls through the pay-per-token API.
 
 `AGENT_AGENT_ENV` controls which `.env.*` file loads (default: `dev`). Never commit secret values.
 

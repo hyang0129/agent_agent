@@ -2,12 +2,12 @@
 # 01_verify_eligibility.sh — Check that a GitHub repo is eligible as a fixture source
 #
 # Usage:
-#   TARGET_REPO=<owner/repo> AGENT_AGENT_FIXTURE_BOT_TOKEN=<token> \
+#   TARGET_REPO=<owner/repo> GITHUB_TOKEN=<token> \
 #     ./scripts/fixtures/01_verify_eligibility.sh
 #
 # Required environment variables:
-#   TARGET_REPO                    — full GitHub repo path, e.g. dbader/schedule
-#   AGENT_AGENT_FIXTURE_BOT_TOKEN  — GitHub token for API access
+#   TARGET_REPO    — full GitHub repo path, e.g. dbader/schedule
+#   GITHUB_TOKEN   — GitHub token for API access
 #
 # Checks:
 #   1. License permits commercial use (blocks CC-NC, SSPL, BSL, no-license)
@@ -20,16 +20,16 @@
 set -euo pipefail
 
 if [[ -z "${TARGET_REPO:-}" ]]; then
-  echo "Usage: TARGET_REPO=<owner/repo> AGENT_AGENT_FIXTURE_BOT_TOKEN=<token> $0" >&2
+  echo "Usage: TARGET_REPO=<owner/repo> GITHUB_TOKEN=<token> $0" >&2
   exit 1
 fi
 
-if [[ -z "${AGENT_AGENT_FIXTURE_BOT_TOKEN:-}" ]]; then
-  echo "ERROR: AGENT_AGENT_FIXTURE_BOT_TOKEN is not set." >&2
+if [[ -z "${GITHUB_TOKEN:-}" ]]; then
+  echo "ERROR: GITHUB_TOKEN is not set." >&2
   exit 1
 fi
 
-export GH_TOKEN="${AGENT_AGENT_FIXTURE_BOT_TOKEN}"
+export GH_TOKEN="${GITHUB_TOKEN}"
 
 echo "Checking eligibility: ${TARGET_REPO} ..."
 echo

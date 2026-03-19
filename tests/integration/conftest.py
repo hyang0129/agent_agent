@@ -8,7 +8,7 @@ Provides:
   - _session_cleanup: session-scoped autouse fixture for bulk teardown
   - fixture_repo: function-scoped fixture that creates an ephemeral GitHub repo
 
-Requires AGENT_AGENT_FIXTURE_BOT_TOKEN env var; tests are skipped if absent.
+Requires GITHUB_TOKEN env var; tests are skipped if absent.
 """
 
 from __future__ import annotations
@@ -16,6 +16,7 @@ from __future__ import annotations
 import json
 import logging
 import os
+import re
 import shutil
 import subprocess
 import uuid
@@ -27,11 +28,28 @@ import httpx
 import pytest
 from pydantic import BaseModel
 
+from agent_agent.config import configure_logging
+
 
 logger = logging.getLogger(__name__)
 
 _GITHUB_API = "https://api.github.com"
+_LOG_DIR = Path("/workspaces/.agent_agent_tests/logs")
 _GITHUB_API_VERSION = "2022-11-28"
+
+# GITHUB_TOKEN is used for both fixture lifecycle (create/delete ephemeral repos)
+# and agent operations (clone, push, PR creation). A single PAT is simpler than
+# maintaining a separate bot account, but it requires these scopes: repo, delete_repo.
+#
+# Scope note: `delete_repo` is needed only for fixture teardown. If you prefer a
+# narrower-scope token, set KEEP_FIXTURE_REPOS=1 and clean up manually — then repo
+# scope alone is sufficient.
+#
+# Windows credential manager warning: when GITHUB_TOKEN was previously embedded
+# directly in git remote URLs (https://x-access-token:<token>@github.com/...), Git
+# for Windows sometimes cached those credentials in the Windows Credential Manager
+# and propagated them to the host outside the devcontainer. We now use the credential
+# helper exclusively to avoid this. Never embed GITHUB_TOKEN in a git remote URL.
 
 _GIT_ENV = {
     **os.environ,
@@ -40,6 +58,36 @@ _GIT_ENV = {
     "GIT_COMMITTER_NAME": "fixture-bot",
     "GIT_COMMITTER_EMAIL": "fixture-bot@localhost",
 }
+
+
+def _assert_git_credential_helper(remote_url: str) -> None:
+    """Raise RuntimeError if no git credential helper can supply credentials for remote_url.
+
+    Runs `git credential fill` with the parsed host/protocol. An empty response
+    means no helper is configured — the subsequent push would fail with a cryptic
+    authentication error. Failing here instead gives a clear, actionable message.
+
+    Run `gh auth login` (devcontainer default) or configure git credential.helper
+    to fix this.
+    """
+    from urllib.parse import urlparse
+
+    parsed = urlparse(remote_url)
+    credential_input = f"protocol={parsed.scheme}\nhost={parsed.hostname}\n\n"
+    result = subprocess.run(
+        ["git", "credential", "fill"],
+        input=credential_input,
+        capture_output=True,
+        text=True,
+    )
+    if not result.stdout.strip():
+        raise RuntimeError(
+            f"No git credential helper is configured for {remote_url}.\n"
+            "Run 'gh auth login' or set up a git credential helper before running "
+            "integration tests. Embedding GITHUB_TOKEN directly in remote URLs is "
+            "intentionally avoided — see conftest.py for the Windows credential "
+            "manager warning."
+        )
 
 
 class FixtureMeta(BaseModel):
@@ -153,11 +201,26 @@ class _FixtureBotClient:
         return results
 
 
+@pytest.fixture(autouse=True)
+def _integration_log_file(request: pytest.FixtureRequest) -> Generator[None, None, None]:
+    """Redirect all structlog output to a per-test log file (overwrite on rerun).
+
+    Log path: /workspaces/.agent_agent_tests/logs/<sanitized-test-name>.log
+    Plain files only — not persisted to SQLite or any other store.
+    """
+    safe_name = re.sub(r"[^\w\-]", "_", request.node.name)
+    log_path = _LOG_DIR / f"{safe_name}.log"
+    configure_logging(log_file=str(log_path))
+    yield
+    # Flush by reconfiguring without a file (restores stdout-only logging).
+    configure_logging()
+
+
 def pytest_configure(config: pytest.Config) -> None:
     """Register the integration marker."""
     config.addinivalue_line(
         "markers",
-        "integration: end-to-end tests requiring AGENT_AGENT_FIXTURE_BOT_TOKEN + GITHUB_TOKEN + ANTHROPIC_API_KEY",
+        "integration: end-to-end tests requiring GITHUB_TOKEN and claude CLI authentication",
     )
 
 
@@ -171,12 +234,15 @@ def session_id() -> str:
 def _session_cleanup(session_id: str) -> Generator[None, None, None]:
     """Session-level safety net: delete any bot repos matching aaf-<session_id>- on teardown.
 
-    Does nothing if AGENT_AGENT_FIXTURE_BOT_TOKEN is absent (no repos were created).
+    Does nothing if GITHUB_TOKEN is absent (no repos were created).
     Token absence is enforced by fixture_repo, not here, so non-integration tests are unaffected.
     """
     yield
 
-    token = os.environ.get("AGENT_AGENT_FIXTURE_BOT_TOKEN", "")
+    if os.environ.get("KEEP_FIXTURE_REPOS"):
+        return
+
+    token = os.environ.get("GITHUB_TOKEN", "")
     if not token:
         return
 
@@ -198,9 +264,13 @@ def fixture_repo(
     Parametrize with indirect=True, passing a FixtureMeta as request.param.
     Yields (repo_url, issue_number). Deletes the repo on teardown.
     """
-    token = os.environ.get("AGENT_AGENT_FIXTURE_BOT_TOKEN", "")
+    token = os.environ.get("GITHUB_TOKEN", "")
     if not token:
-        pytest.skip("AGENT_AGENT_FIXTURE_BOT_TOKEN not set — skipping integration test")
+        pytest.skip("GITHUB_TOKEN not set — skipping integration test")
+
+    # Check credential helper before creating any GitHub resources so a misconfigured
+    # environment fails fast without leaving behind an orphaned repo.
+    _assert_git_credential_helper("https://github.com/")
 
     if not hasattr(request, "param"):
         pytest.fail("fixture_repo must be used with indirect=True")
@@ -213,11 +283,12 @@ def fixture_repo(
             description=f"Ephemeral test fixture: {meta.fixture_id}",
         )
 
-        def teardown() -> None:
-            with _FixtureBotClient(token) as teardown_client:
-                teardown_client.delete_repo(full_repo)
+        if not os.environ.get("KEEP_FIXTURE_REPOS"):
+            def teardown() -> None:
+                with _FixtureBotClient(token) as teardown_client:
+                    teardown_client.delete_repo(full_repo)
 
-        request.addfinalizer(teardown)
+            request.addfinalizer(teardown)
 
         clone_dir = tmp_path / "clone"
 
@@ -243,7 +314,9 @@ def fixture_repo(
         _git_in(clone_dir, "init")
         _git_in(clone_dir, "add", ".")
         _git_in(clone_dir, "commit", "-m", "fixture: initial state")
-        remote_url = f"https://x-access-token:{token}@github.com/{full_repo}"
+        # Plain HTTPS remote — push auth is handled by the devcontainer git
+        # credential helper (gh auth or credential.helper=store with GITHUB_TOKEN).
+        remote_url = f"https://github.com/{full_repo}"
         _git_in(clone_dir, "remote", "add", "origin", remote_url)
         _git_in(clone_dir, "push", "-u", "origin", "HEAD:main")
 

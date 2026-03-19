@@ -1,12 +1,12 @@
 """Component tests for ReviewComposite — real SDK calls.
 
-These tests require ANTHROPIC_API_KEY and make real Claude API calls.
-Mark with @pytest.mark.sdk so they are skipped in CI without API keys.
+These tests require the claude CLI to be installed and authenticated (Max plan).
+Mark with @pytest.mark.sdk so they are skipped in CI without claude CLI.
 """
 
 from __future__ import annotations
 
-import os
+import shutil
 import subprocess
 from pathlib import Path
 
@@ -34,9 +34,9 @@ from agent_agent.worktree import WorktreeRecord
 pytestmark = pytest.mark.sdk
 
 
-def _skip_without_api_key() -> None:
-    if not os.environ.get("ANTHROPIC_API_KEY"):
-        pytest.skip("ANTHROPIC_API_KEY not set — skipping SDK test")
+def _skip_without_claude_cli() -> None:
+    if shutil.which("claude") is None:
+        pytest.skip("claude CLI not found — skipping SDK test")
 
 
 def _make_settings() -> Settings:
@@ -161,7 +161,7 @@ class TestReviewCompositeSDK:
         self, repo_with_branch: tuple[Path, str], review_worktree: WorktreeRecord
     ) -> None:
         """Given a branch with real code changes, Reviewer returns valid ReviewOutput."""
-        _skip_without_api_key()
+        _skip_without_claude_cli()
 
         repo, _branch = repo_with_branch
         settings = _make_settings()
@@ -187,7 +187,7 @@ class TestReviewCompositeSDK:
         self, repo_with_branch: tuple[Path, str], review_worktree: WorktreeRecord
     ) -> None:
         """ReviewOutput.verdict is one of: approved, needs_rework, rejected."""
-        _skip_without_api_key()
+        _skip_without_claude_cli()
 
         repo, _branch = repo_with_branch
         settings = _make_settings()
@@ -215,7 +215,7 @@ class TestReviewCompositeSDK:
         self, repo_with_branch: tuple[Path, str], review_worktree: WorktreeRecord
     ) -> None:
         """ReviewOutput.findings is a list of ReviewFinding objects."""
-        _skip_without_api_key()
+        _skip_without_claude_cli()
 
         repo, _branch = repo_with_branch
         settings = _make_settings()
