@@ -254,7 +254,7 @@ class TestPlanCompositeExecute:
         )
 
         config = mock_invoke.call_args.kwargs["config"]
-        all_tools = set(config.allowed_tools)
+        all_tools = {name for perm in config.permissions for name in perm.sdk_tool_names}
         # Read-only: Read, Glob, Grep, Bash
         assert all_tools == {"Read", "Glob", "Grep", "Bash"}
         # No write tools

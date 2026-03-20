@@ -15,7 +15,7 @@ from ..models.context import NodeContext
 from ..worktree import WorktreeRecord
 from .base import SubAgentConfig, compute_sdk_backstop, invoke_agent
 from .prompts import POLICY_REVIEWER
-from .tools import policy_reviewer_allowed_tools
+from .tools import policy_reviewer_permissions
 
 
 class PolicyReviewer:
@@ -47,7 +47,7 @@ class PolicyReviewer:
         config = SubAgentConfig(
             name="policy_reviewer",
             system_prompt=system_prompt,
-            allowed_tools=policy_reviewer_allowed_tools(),
+            permissions=policy_reviewer_permissions(),
             output_model=PolicyReviewOutput,
             max_turns=self._settings.reviewer_max_turns,
         )

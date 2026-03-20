@@ -16,10 +16,13 @@ from agent_agent.agents.base import (
     serialize_node_context,
 )
 from agent_agent.agents.tools import (
+    ToolPermission,
     debugger_allowed_tools,
     plan_allowed_tools,
     programmer_allowed_tools,
+    programmer_permissions,
     reviewer_allowed_tools,
+    reviewer_permissions,
     test_designer_allowed_tools,
     test_executor_allowed_tools as te_allowed_tools,
 )
@@ -82,7 +85,7 @@ def _make_config(**kwargs: Any) -> SubAgentConfig:
     defaults: dict[str, Any] = {
         "name": "test_agent",
         "system_prompt": "You are a test agent.",
-        "allowed_tools": ["Read", "Glob", "Grep"],
+        "permissions": [ToolPermission(sdk_tool_names=frozenset({"Read", "Glob", "Grep"}))],
         "output_model": PlanOutput,
         "max_turns": 10,
     }
@@ -213,14 +216,16 @@ class TestInvokeAgentOptions:
         mock_query.side_effect = lambda *a, **kw: _gen(*a, **kw)
         mock_options_cls.return_value = MagicMock()
 
-        cfg = _make_config(allowed_tools=["Read", "Glob", "Grep"])
+        cfg = _make_config(
+            permissions=[ToolPermission(sdk_tool_names=frozenset({"Read", "Glob", "Grep"}))]
+        )
         ctx = _make_node_context()
         await invoke_agent(cfg, ctx, "claude-haiku-4-5-20251001", 1.0, "/tmp", "run-1", "n-1")
 
         _, kwargs = mock_options_cls.call_args
         assert kwargs["extra_args"] == {"print": None}
-        assert kwargs["allowed_tools"] == ["Read", "Glob", "Grep"]
-        assert kwargs["permission_mode"] is None
+        assert set(kwargs["allowed_tools"]) == {"Read", "Glob", "Grep"}
+        assert callable(kwargs["permission_mode"])
 
 
 # ---------------------------------------------------------------------------
@@ -454,3 +459,54 @@ class TestComputeSdkBackstop:
         assert compute_sdk_backstop(2.0, 10.0) == 2.25
         # node_alloc=5.0, total=10.0 -> min(10.0, 5.25) = 5.25
         assert compute_sdk_backstop(5.0, 10.0) == 5.25
+
+
+# ---------------------------------------------------------------------------
+# ToolPermission tests
+# ---------------------------------------------------------------------------
+
+
+class TestToolPermissions:
+    def test_reviewer_bash_blocks_git_commit(self) -> None:
+        perms = reviewer_permissions()
+        bash_perm = next(p for p in perms if "Bash" in p.sdk_tool_names)
+        assert bash_perm.validate_args is not None
+        assert bash_perm.validate_args("Bash", {"command": "git commit -m test"}) is False
+
+    def test_reviewer_bash_allows_git_log(self) -> None:
+        perms = reviewer_permissions()
+        bash_perm = next(p for p in perms if "Bash" in p.sdk_tool_names)
+        assert bash_perm.validate_args is not None
+        assert bash_perm.validate_args("Bash", {"command": "git log --oneline"}) is True
+
+    def test_programmer_bash_allows_git_commit(self) -> None:
+        perms = programmer_permissions(worktree_root="/tmp/worktree")
+        bash_perm = next(p for p in perms if "Bash" in p.sdk_tool_names)
+        assert bash_perm.validate_args is not None
+        assert bash_perm.validate_args("Bash", {"command": "git commit -m 'fix'"}) is True
+
+    def test_programmer_bash_blocks_git_push(self) -> None:
+        perms = programmer_permissions(worktree_root="/tmp/worktree")
+        bash_perm = next(p for p in perms if "Bash" in p.sdk_tool_names)
+        assert bash_perm.validate_args is not None
+        assert bash_perm.validate_args("Bash", {"command": "git push origin main"}) is False
+
+    def test_permission_callback_denies_unlisted_tool(self) -> None:
+        """A tool not in any permission is denied by the callback built in invoke_agent."""
+        # Build a SubAgentConfig with read-only perms (no Write)
+        read_only_perm = ToolPermission(sdk_tool_names=frozenset({"Read", "Glob", "Grep"}))
+        # Simulate the callback logic from invoke_agent
+        permissions = [read_only_perm]
+
+        def _permission_callback(tool_name: str, tool_args: dict[str, Any]) -> bool:
+            for perm in permissions:
+                if tool_name in perm.sdk_tool_names:
+                    if perm.validate_args is None:
+                        return True
+                    return perm.validate_args(tool_name, tool_args)
+            return False  # tool not in any permission — deny
+
+        # Write is not in the permissions — must be denied
+        assert _permission_callback("Write", {"path": "/tmp/x", "content": "y"}) is False
+        # Read is allowed
+        assert _permission_callback("Read", {"path": "/tmp/x"}) is True

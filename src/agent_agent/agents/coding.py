@@ -28,9 +28,9 @@ from ..worktree import WorktreeRecord
 from .base import SubAgentConfig, compute_sdk_backstop, invoke_agent
 from .prompts import DEBUGGER, PROGRAMMER, TESTER
 from .tools import (
-    debugger_allowed_tools,
-    programmer_allowed_tools,
-    tester_allowed_tools,
+    debugger_permissions,
+    programmer_permissions,
+    test_executor_permissions,
 )
 
 _logger = structlog.get_logger(__name__)
@@ -325,7 +325,7 @@ class CodingComposite:
         config = SubAgentConfig(
             name="programmer",
             system_prompt=system_prompt,
-            allowed_tools=programmer_allowed_tools(),
+            permissions=programmer_permissions(worktree_root=self._worktree.path),
             output_model=CodeOutput,
             max_turns=self._settings.programmer_max_turns,
         )
@@ -360,7 +360,7 @@ class CodingComposite:
         config = SubAgentConfig(
             name="tester",
             system_prompt=TESTER.format(worktree_path=self._worktree.path),
-            allowed_tools=tester_allowed_tools(),
+            permissions=test_executor_permissions(worktree_root=self._worktree.path),
             output_model=AgentTestOutput,
             max_turns=self._settings.tester_max_turns,
         )
@@ -400,7 +400,7 @@ class CodingComposite:
         config = SubAgentConfig(
             name="debugger",
             system_prompt=system_prompt,
-            allowed_tools=debugger_allowed_tools(),
+            permissions=debugger_permissions(worktree_root=self._worktree.path),
             output_model=CodeOutput,
             max_turns=self._settings.debugger_max_turns,
         )

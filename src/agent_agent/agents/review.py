@@ -18,7 +18,7 @@ from ..worktree import WorktreeRecord
 from .base import SubAgentConfig, compute_sdk_backstop, invoke_agent
 from .policy_review import PolicyReviewer
 from .prompts import REVIEWER
-from .tools import reviewer_allowed_tools
+from .tools import reviewer_permissions
 
 
 def _merge_verdict(
@@ -61,7 +61,7 @@ class ReviewComposite:
         reviewer_config = SubAgentConfig(
             name="reviewer",
             system_prompt=system_prompt,
-            allowed_tools=reviewer_allowed_tools(),
+            permissions=reviewer_permissions(),
             output_model=ReviewOutput,
             max_turns=self._settings.reviewer_max_turns,
         )

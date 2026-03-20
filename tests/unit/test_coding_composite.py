@@ -388,8 +388,9 @@ class TestCodingCompositeProgrammerConfig:
         assert programmer_config.output_model is CodeOutput
 
         # Write tools: should include Edit, Write
-        assert "Edit" in programmer_config.allowed_tools
-        assert "Write" in programmer_config.allowed_tools
+        all_tools = {name for perm in programmer_config.permissions for name in perm.sdk_tool_names}
+        assert "Edit" in all_tools
+        assert "Write" in all_tools
 
 
 class TestCodingCompositeTesterConfig:
@@ -417,10 +418,11 @@ class TestCodingCompositeTesterConfig:
         assert tester_config.name == "tester"
         assert tester_config.max_turns == _make_settings().tester_max_turns
 
-        assert "Write" in tester_config.allowed_tools
-        assert "Edit" in tester_config.allowed_tools
-        assert "Bash" in tester_config.allowed_tools
-        assert "Read" in tester_config.allowed_tools
+        all_tools = {name for perm in tester_config.permissions for name in perm.sdk_tool_names}
+        assert "Write" in all_tools
+        assert "Edit" in all_tools
+        assert "Bash" in all_tools
+        assert "Read" in all_tools
 
 
 class TestCodingCompositeDebuggerConfig:
@@ -455,8 +457,9 @@ class TestCodingCompositeDebuggerConfig:
         assert dbg_config.max_turns == _make_settings().debugger_max_turns
         assert dbg_config.output_model is CodeOutput
 
-        assert "Edit" in dbg_config.allowed_tools
-        assert "Write" in dbg_config.allowed_tools
+        all_tools = {name for perm in dbg_config.permissions for name in perm.sdk_tool_names}
+        assert "Edit" in all_tools
+        assert "Write" in all_tools
 
 
 class TestCodingCompositeBranchName:
