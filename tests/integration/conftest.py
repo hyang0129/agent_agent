@@ -2,11 +2,14 @@
 
 Provides:
   - FixtureMeta: Pydantic v2 model for fixture catalog entries
+  - PolicyIntegratedFixtureMeta: model for Mode 2 integrated policy fixtures
   - load_all_fixtures(): reads all *.json files from a directory
+  - load_policy_integrated_fixtures(): reads Mode 2 integrated fixture JSONs
   - _FixtureBotClient: synchronous httpx wrapper for bot account operations
   - session_id: session-scoped session identifier fixture
   - _session_cleanup: session-scoped autouse fixture for bulk teardown
   - fixture_repo: function-scoped fixture that creates an ephemeral GitHub repo
+  - policy_fixture_repo: builds a synthetic repo from repo_files dict (Mode 2)
 
 Requires GITHUB_TOKEN env var; tests are skipped if absent.
 """
@@ -116,6 +119,38 @@ def load_all_fixtures(
         records = json.loads(json_file.read_text())
         for record in records:
             fixtures.append(FixtureMeta.model_validate(record))
+    return fixtures
+
+
+class PolicyIntegratedFixtureMeta(BaseModel):
+    """Fixture metadata for Mode 2 integrated policy tests.
+
+    Unlike FixtureMeta (which clones an upstream repo at a pinned SHA),
+    PolicyIntegratedFixtureMeta builds the repo from scratch using repo_files.
+    The CLAUDE.md in repo_files contains the committed policy the orchestrator
+    must respect when resolving the issue.
+    """
+
+    fixture_id: str
+    complexity: Literal["easy", "medium", "hard"]
+    issue_title: str
+    issue_body: str
+    repo_files: dict[str, str]  # relative path -> file content
+    violation_regex: str  # pattern that must NOT appear in the resolved diff
+    compliance_regex: str  # pattern that MUST appear in the resolved diff
+    expect_rework_cycle: bool = False  # if True, test asserts rework cycle occurred
+
+
+def load_policy_integrated_fixtures(
+    catalog_dir: Path = (
+        Path(__file__).parent.parent / "fixtures" / "policy" / "integrated"
+    ),
+) -> list[PolicyIntegratedFixtureMeta]:
+    """Read all *.json files from catalog_dir as PolicyIntegratedFixtureMeta."""
+    fixtures: list[PolicyIntegratedFixtureMeta] = []
+    for json_file in sorted(catalog_dir.glob("*.json")):
+        record = json.loads(json_file.read_text())
+        fixtures.append(PolicyIntegratedFixtureMeta.model_validate(record))
     return fixtures
 
 
@@ -360,6 +395,82 @@ def fixture_repo(
         remote_url = f"https://github.com/{full_repo}"
         _git_in(clone_dir, "remote", "add", "origin", remote_url)
         _git_in(clone_dir, "push", "-u", "origin", "HEAD:main")
+
+        issue_number = client.post_issue(
+            full_repo=full_repo,
+            title=meta.issue_title,
+            body=meta.issue_body,
+        )
+
+    bot_username = full_repo.split("/")[0]
+    repo_url = f"https://github.com/{bot_username}/{repo_name}"
+
+    yield repo_url, issue_number
+
+
+@pytest.fixture()
+def policy_fixture_repo(
+    request: pytest.FixtureRequest,
+    session_id: str,
+    tmp_path: Path,
+) -> Generator[tuple[str, int], None, None]:
+    """Create an ephemeral GitHub repo from a PolicyIntegratedFixtureMeta.
+
+    Instead of cloning an upstream repo at a pinned SHA, builds the repo
+    from scratch using the repo_files dict embedded in the fixture metadata.
+    The CLAUDE.md in repo_files contains the committed policy the orchestrator
+    must respect.
+
+    Parametrize with indirect=True, passing a PolicyIntegratedFixtureMeta as
+    request.param. Yields (repo_url, issue_number). Deletes the repo on teardown.
+    """
+    token = os.environ.get("GITHUB_TOKEN", "")
+    if not token:
+        pytest.skip("GITHUB_TOKEN not set — skipping integration test")
+
+    _assert_git_credential_helper("https://github.com/")
+
+    if not hasattr(request, "param"):
+        pytest.fail("policy_fixture_repo must be used with indirect=True")
+    meta: PolicyIntegratedFixtureMeta = request.param
+    repo_name = f"aaf-{session_id}-{meta.fixture_id}"
+
+    with _FixtureBotClient(token) as client:
+        full_repo = client.create_repo(
+            repo_name=repo_name,
+            description=f"Ephemeral policy test fixture: {meta.fixture_id}",
+        )
+
+        if not os.environ.get("KEEP_FIXTURE_REPOS"):
+            def teardown() -> None:
+                with _FixtureBotClient(token) as teardown_client:
+                    teardown_client.delete_repo(full_repo)
+
+            request.addfinalizer(teardown)
+
+        repo_dir = tmp_path / "repo"
+        repo_dir.mkdir()
+
+        def _git_in(path: Path, *args: str) -> None:
+            subprocess.run(
+                ["git", "-C", str(path), *args],
+                check=True,
+                capture_output=True,
+                env=_GIT_ENV,
+            )
+
+        # Build repo from scratch using repo_files dict
+        _git_in(repo_dir, "init")
+        for file_path_str, content in meta.repo_files.items():
+            file_path = repo_dir / file_path_str
+            file_path.parent.mkdir(parents=True, exist_ok=True)
+            file_path.write_text(content)
+        _git_in(repo_dir, "add", ".")
+        _git_in(repo_dir, "commit", "-m", "fixture: initial state")
+
+        remote_url = f"https://github.com/{full_repo}"
+        _git_in(repo_dir, "remote", "add", "origin", remote_url)
+        _git_in(repo_dir, "push", "-u", "origin", "HEAD:main")
 
         issue_number = client.post_issue(
             full_repo=full_repo,

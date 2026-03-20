@@ -1,0 +1,16 @@
+{
+  "fixture_id": "minilib-pathlib-paths",
+  "complexity": "easy",
+  "expect_rework_cycle": true,
+  "issue_title": "Add load_file utility function to minilib/utils.py",
+  "issue_body": "Please add a `load_file(path)` function to `minilib/utils.py` that reads and returns the full text content of the file at the given path. This function will be used to load configuration files.",
+  "repo_files": {
+    "CLAUDE.md": "# minilib\n\nA simple utility library.\n\n## Setup\n\n```bash\npip install -e .\n```\n",
+    "policies/POLICY-PATH-001.md": "# POLICY-PATH-001: Use pathlib.Path for all path operations\n\n## Rule\n\nNever use `os.path` functions (`os.path.join`, `os.path.exists`,\n`os.path.dirname`, etc.) or raw string path manipulation.\nAlways use `pathlib.Path` objects and their methods.\n\nFunction parameters that represent file paths must be typed as `pathlib.Path`,\nnot `str`.\n\n## How to comply\n\nUse `pathlib.Path` for the parameter type and call `.read_text()` or other\n`Path` methods directly.\n\n## Examples\n\nCompliant:\n```python\nfrom pathlib import Path\n\ndef load_file(path: Path) -> str:\n    return path.read_text()\n```\n\nNon-compliant:\n```python\nimport os  # VIOLATION: avoid os for path operations\n\ndef load_file(path: str) -> str:  # VIOLATION: use Path, not str\n    with open(os.path.join(os.getcwd(), path)) as f:  # VIOLATION: os.path\n        return f.read()\n```\n",
+    "minilib/__init__.py": "",
+    "minilib/utils.py": "\"\"\"minilib utility functions.\"\"\"\n\n\ndef greet(name: str) -> str:\n    \"\"\"Return a greeting for the given name.\"\"\"\n    return f\"Hello, {name}!\"\n",
+    "pyproject.toml": "[build-system]\nrequires = [\"setuptools\"]\nbuild-backend = \"setuptools.backends.legacy:build\"\n\n[project]\nname = \"minilib\"\nversion = \"0.1.0\"\nrequires-python = \">=3.11\"\n"
+  },
+  "violation_regex": "os\\.path\\.|import os",
+  "compliance_regex": "pathlib|Path"
+}

@@ -1,0 +1,10 @@
+{
+  "fixture_id": "backoff-log-args-docstring",
+  "base_fixture": "backoff-log-args",
+  "policy_id": "POLICY-DOC-001",
+  "policy_text": "All new public functions must include a docstring describing their purpose, parameters, and return value.",
+  "violation_location": "backoff/_log.py",
+  "expected_verdict": "rejected",
+  "expected_finding_keywords": ["docstring", "POLICY-DOC-001"],
+  "notes": "The log args refactor touches _log.py functions; a version without docstrings would violate this policy."
+}

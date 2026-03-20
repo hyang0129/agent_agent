@@ -1,0 +1,67 @@
+[
+  {
+    "fixture_id": "blinker-weakref-shutdown",
+    "complexity": "easy",
+    "upstream": "https://github.com/pallets-eco/blinker",
+    "base_sha": "dcce3e97743494433025e0b68f742f3582b6ba6a",
+    "license": "MIT",
+    "pr_number": 174,
+    "issue_number": 173,
+    "issue_title": "Exceptions (ignored) in finalizers running during interpreter shutdown",
+    "issue_body": "Hi!\n\nI think under some circumstances weakref callbacks from blinker 1.8.2 signals raise exceptions during interpreter shutdown, leading to \"Exception ignored\" errors right on exit. For example:\n\n```\nException ignored in: <function WeakMethod.__new__.<locals>._cb at 0x72f2bde718a0>\nTraceback (most recent call last):\n  File \"/usr/lib/python3.12/weakref.py\", line 57, in _cb\nAttributeError: 'NoneType' object has no attribute '_alive'\n```\n\n## Context\n\nI'm sorry that I don't have a reproducer for this. I've tried, but as it seems to depend on order of finalizers during shutdown I can't seem to figure out a sequence that makes it trigger. I see it building my blog as a static site using the Pelican static site generator...\n\n## Possible fix\n\n* Rolling back to blinker 1.7.0, the problem no longer appears.\n* Applying a patch that checks `sys.is_finalizing()` in the weakref cleanup callback resolves it.",
+    "synthetic_issue": false,
+    "merged_from": []
+  },
+  {
+    "fixture_id": "blinker-int-sender",
+    "complexity": "easy",
+    "upstream": "https://github.com/pallets-eco/blinker",
+    "base_sha": "d06b2416ea43c535b907b7d0a2b72fff3b2f3a0f",
+    "license": "MIT",
+    "pr_number": 83,
+    "issue_number": 30,
+    "issue_title": "Using `int` as a sender does not always work.",
+    "issue_body": "Hi, I stumbled upon an issue when using `int` as signal `sender`. Receivers where called for some random senders, but not for others.\n\nPlease consider this minimal example:\n\n```python\nimport blinker\n\nmy_signal = blinker.Signal()\n\ndef handler(sender):\n    print(\"Got it!\")\n\nmy_signal.connect(handler, sender=123456789)\nmy_signal.send(123456789)\n# prints \"Got it!\"\nmy_signal.send(123456789 + 0)\n# .. nothing ...\n```\n\nThis behaviour seems to be caused by comparing senders by `id(sender)`, result of which might be different for integers with the same value during lifetime of a program.\n\nOne way to fix this, could be to use `hash()` instead of `id()`. In my opinion it would result in a more intuitive behaviour - e.g. namedtuples and any value objects could be safely used as sender arguments. However, just replacing `id(sender)` with `hash(sender)` will fail on hash collisions (most notably, `hash(-1) == hash(-2)`). Also, that can be a backward incompatible change for some.\nAny other ideas?",
+    "synthetic_issue": false,
+    "merged_from": []
+  },
+  {
+    "fixture_id": "blinker-muted-context",
+    "complexity": "medium",
+    "upstream": "https://github.com/pallets-eco/blinker",
+    "base_sha": "9c2f289f024e7aac20bf3dbdebfc4ec279df3458",
+    "license": "MIT",
+    "pr_number": 84,
+    "issue_number": 64,
+    "issue_title": "Temporarily disable a signal in a block",
+    "issue_body": "I have an application that generates reports from a bunch of sources. When a report is generated, a Blinker signal `report_created` is called, and one of the receivers sends an email to subscribers of that report type.\n\nIt sometimes happens, however, that we want to (re/)generate a large amount of reports. In such cases we don't want email sending to happen. However, if an actual report gets generated meanwhile by the normal means, i want the receiver to be called, so i can't just disconnect that receiver.\n\nWhat i could imagine is something like this:\n\n```\nwith report_created.disable():\n    generate_a_lot_of_reports()\n```\n\nAs far as i understand, this is not possible in the current Blinker version, but please correct me if i'm wrong. Also, if this use case seems valid (ie. not a unicorn case, when only my project needs it) i'm willing to dig deeper and submit a PR for this.",
+    "synthetic_issue": false,
+    "merged_from": []
+  },
+  {
+    "fixture_id": "blinker-ordered-receivers",
+    "complexity": "medium",
+    "upstream": "https://github.com/pallets-eco/blinker",
+    "base_sha": "fe3ec897fa67e5f86ec41cbc8b5f43773b4d5dc1",
+    "license": "MIT",
+    "pr_number": 116,
+    "issue_number": 86,
+    "issue_title": "Run receivers in the order they were connected",
+    "issue_body": "This makes it easier to reason about the order in which events happen.\n\nThis follows Django's signals, which also maintain order: https://github.com/django/django/blob/main/django/dispatch/dispatcher.py#L39\n\nThis is a similar implementation of https://github.com/pallets-eco/blinker/pull/34/, but more robust and without external dependencies",
+    "synthetic_issue": false,
+    "merged_from": []
+  },
+  {
+    "fixture_id": "blinker-send-async",
+    "complexity": "hard",
+    "upstream": "https://github.com/pallets-eco/blinker",
+    "base_sha": "904d8d3803e84257c08526e9047474215aa1c976",
+    "license": "MIT",
+    "pr_number": 18,
+    "issue_number": 17,
+    "issue_title": "Consider asyncio features ala asyncblink",
+    "issue_body": "\"AsyncBlink is a small extension to Blinker and enables you to use coroutines as receivers for your signals.\"\n\nSeems to be essentially a modification of `send()` like so:\n\n```python\n# the only difference is here. If it's a coroutine,\n# run it with asyncio.async()\nreceivers = self.receivers_for(sender) or []\nreturn_list = []\n\nfor receiver in receivers:\n    ret = receiver(sender, **kwargs)\n    if asyncio.iscoroutine(ret):\n        asyncio.get_event_loop().run_until_complete(ret)\n```",
+    "synthetic_issue": false,
+    "merged_from": []
+  }
+]

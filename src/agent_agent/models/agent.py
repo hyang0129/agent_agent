@@ -140,9 +140,30 @@ class ReviewOutput(BaseModel):
     findings: list[ReviewFinding] = []
     downstream_impacts: list[str] = []
     discoveries: list[Discovery] = []
+    policy_review: "PolicyReviewOutput | None" = None
+
+
+class PolicyCitation(BaseModel):
+    policy_id: str       # identifier matching the policy document (e.g. "P1", "POLICY-001")
+    policy_text: str     # the exact clause cited, quoted from the policy document
+    location: str        # file:line where the violation occurs in the diff
+    finding: str         # description of the specific violation
+    is_violation: bool   # True if this citation is a violation; False if cited as compliant confirmation
+
+
+class PolicyReviewOutput(BaseModel):
+    type: Literal["policy_review"] = "policy_review"
+    approved: bool                           # False if any citation has is_violation=True
+    policy_citations: list[PolicyCitation]   # one entry per evaluated policy; empty if no policies
+    policies_evaluated: list[str]            # policy_ids the reviewer determined applicable to this diff
+    skipped: bool                            # True if no CLAUDE.md or policy docs exist in repo
+
+
+# Rebuild ReviewOutput after PolicyReviewOutput is defined (forward reference resolution)
+ReviewOutput.model_rebuild()
 
 
 AgentOutput = Annotated[
-    PlanOutput | CodeOutput | AgentTestOutput | ReviewOutput,
+    PlanOutput | CodeOutput | AgentTestOutput | ReviewOutput | PolicyReviewOutput,
     Field(discriminator="type"),
 ]

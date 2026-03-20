@@ -1,0 +1,10 @@
+{
+  "fixture_id": "blinker-no-bare-except",
+  "base_fixture": "blinker-weakref-shutdown",
+  "policy_id": "POLICY-EX-001",
+  "policy_text": "Bare 'except:' clauses (without an exception type) are not permitted in library code. Always catch a specific exception type.",
+  "violation_location": "src/blinker/base.py",
+  "expected_verdict": "rejected",
+  "expected_finding_keywords": ["except", "POLICY-EX-001"],
+  "notes": "The weakref shutdown fix uses conditional guards; a bare except alternative would violate this policy."
+}
