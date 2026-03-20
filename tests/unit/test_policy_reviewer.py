@@ -129,9 +129,10 @@ class TestPolicyReviewerConfig:
         reviewer = PolicyReviewer(_make_settings(), _make_worktree(), _make_budget())
         await reviewer.execute(_make_node_context(), "run-1", "review-node")
         config = mock_invoke.call_args.kwargs["config"]
-        assert set(config.allowed_tools) == {"Read", "Glob", "Grep", "Bash"}
-        assert "Edit" not in config.allowed_tools
-        assert "Write" not in config.allowed_tools
+        all_tools = {t for perm in config.permissions for t in perm.sdk_tool_names}
+        assert all_tools == {"Read", "Glob", "Grep", "Bash"}
+        assert "Edit" not in all_tools
+        assert "Write" not in all_tools
 
     @patch("agent_agent.agents.policy_review.invoke_agent", new_callable=AsyncMock)
     async def test_system_prompt_includes_worktree_path(self, mock_invoke: AsyncMock) -> None:

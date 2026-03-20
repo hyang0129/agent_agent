@@ -6,6 +6,25 @@
 - A GitHub personal access token with `repo` scope
 - Claude CLI authenticated with a Max plan account (`~/.claude/` credentials)
 
+### Install the Claude CLI
+
+```bash
+curl -fsSL https://claude.ai/install.sh | bash
+export PATH="$HOME/.local/bin:$PATH"  # add to ~/.bashrc to persist
+```
+
+Then authenticate:
+
+```bash
+claude login
+```
+
+Verify auth:
+
+```bash
+claude auth status
+```
+
 ## Install
 
 ```bash

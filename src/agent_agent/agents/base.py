@@ -10,7 +10,10 @@ import json
 from dataclasses import dataclass
 from typing import Any, AsyncIterator, Literal, cast
 
+from .tools import ToolPermission
+
 import structlog
+from claude_agent_sdk.types import PermissionResultAllow, PermissionResultDeny
 from pydantic import BaseModel, ValidationError
 
 from ..dag.executor import (
@@ -45,7 +48,7 @@ class SubAgentConfig:
 
     name: str  # e.g. "programmer", "debugger", "reviewer"
     system_prompt: str
-    allowed_tools: list[str]  # tool whitelist; CLI auto-denies others via --print
+    permissions: list[ToolPermission]  # tool + arg-level permissions [P3.4/P8.5]
     output_model: type[BaseModel]  # Pydantic model for structured output
     max_turns: int  # iteration cap per P10.3
     use_thinking: bool = False  # extended reasoning for Plan composite [P10.11]
@@ -240,6 +243,37 @@ async def invoke_agent(
     }
 
     # 3. Build ClaudeAgentOptions
+    # Extract tool names from permissions (single source of truth) [P3.4/P8.5]
+    # Deduplicate while preserving order (dict.fromkeys preserves insertion order).
+    allowed_tools = list(
+        dict.fromkeys(name for perm in config.permissions for name in sorted(perm.sdk_tool_names))
+    )
+
+    # Build argument-level permission callback [P3.4/P8.5]
+    _permissions = config.permissions  # capture for closure
+    _agent_name = config.name  # capture for denial logging
+
+    # First-match-wins: the first ToolPermission whose sdk_tool_names contains
+    # tool_name is the sole arbiter for that tool call. ToolPermission objects
+    # must not overlap on tool names — enforce this in ToolPermission or
+    # SubAgentConfig construction if needed.
+    async def _can_use_tool(tool_name: str, tool_args: dict[str, Any], _ctx: Any) -> PermissionResultAllow | PermissionResultDeny:
+        for perm in _permissions:
+            if tool_name in perm.sdk_tool_names:
+                if perm.validate_args is None:
+                    return PermissionResultAllow()
+                result = perm.validate_args(tool_name, tool_args)
+                if not result:
+                    _logger.warning(
+                        "tool.arg_denied",
+                        tool_name=tool_name,
+                        tool_args=tool_args,
+                        agent=_agent_name,
+                    )
+                    return PermissionResultDeny(message=f"tool argument validation failed for {tool_name}")
+                return PermissionResultAllow()
+        return PermissionResultDeny(message=f"tool {tool_name!r} not in permissions for agent {_agent_name!r}")
+
     thinking_config: ThinkingConfigEnabled | None = None
     effort_value: Literal["low", "medium", "high", "max"] | None = None
     if config.use_thinking:
@@ -250,13 +284,13 @@ async def invoke_agent(
 
     options = ClaudeAgentOptions(
         system_prompt=config.system_prompt,
-        allowed_tools=config.allowed_tools,
+        allowed_tools=allowed_tools,
         disallowed_tools=[],
         model=model,
         max_budget_usd=sdk_budget_backstop_usd,
         max_turns=config.max_turns,
         cwd=cwd,
-        permission_mode=None,  # --print mode auto-denies tools not in allowed_tools list; no callback needed
+        can_use_tool=_can_use_tool,  # argument-level validation callback [P3.4/P8.5]
         extra_args={"print": None},
         thinking=thinking_config,
         effort=effort_value,

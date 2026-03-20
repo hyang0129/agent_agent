@@ -259,7 +259,7 @@ class TestReviewPermissions:
         """Test 4 (non-SDK): reviewer_permissions() must NOT include Edit or Write."""
         from agent_agent.agents.tools import reviewer_permissions
 
-        perms = reviewer_permissions(worktree_root="/tmp/test-worktree")
+        perms = reviewer_permissions()
 
         # Collect all SDK tool names the reviewer is allowed to call
         all_tool_names: set[str] = set()
@@ -278,7 +278,7 @@ class TestReviewPermissions:
         """Test 4b (non-SDK): reviewer_permissions() must include Read, Glob, Grep."""
         from agent_agent.agents.tools import reviewer_permissions
 
-        perms = reviewer_permissions(worktree_root="/tmp/test-worktree")
+        perms = reviewer_permissions()
 
         all_tool_names: set[str] = set()
         for perm in perms:
@@ -293,7 +293,7 @@ class TestReviewPermissions:
         """Test 4c (non-SDK): reviewer Bash permission has validate_args set (read-only guard)."""
         from agent_agent.agents.tools import reviewer_permissions
 
-        perms = reviewer_permissions(worktree_root="/tmp/test-worktree")
+        perms = reviewer_permissions()
 
         bash_perms = [p for p in perms if "Bash" in p.sdk_tool_names]
         assert bash_perms, "Reviewer should have Bash permission for read-only commands"

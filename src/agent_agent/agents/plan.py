@@ -20,7 +20,7 @@ from ..models.agent import ChildDAGSpec, PlanOutput
 from ..models.context import NodeContext
 from .base import SubAgentConfig, compute_sdk_backstop, invoke_agent
 from .prompts import CONSOLIDATION_PLANNER, RESEARCH_PLANNER_ORCHESTRATOR
-from .tools import plan_allowed_tools
+from .tools import plan_permissions
 
 _logger = structlog.get_logger(__name__)
 
@@ -83,7 +83,7 @@ class PlanComposite:
         config = SubAgentConfig(
             name="research_planner_orchestrator",
             system_prompt=system_prompt,
-            allowed_tools=plan_allowed_tools(),
+            permissions=plan_permissions(),
             output_model=PlanOutput,
             max_turns=self._settings.plan_max_turns,
             use_thinking=self._settings.plan_use_thinking,
