@@ -10,10 +10,7 @@ Human involvement is anchored to one planned checkpoint (branch/PR review after 
 
 ### P9.2 Checkpoint: Branch ready for review
 
-After execution completes, the orchestrator surfaces the finished branch for human review. The human reads the diff and either approves (merge) or rejects (triggers improvement loop).
-
-**MVP:** No GitHub PR is created. The orchestrator prints the branch name and a summary of what was done. The human reviews the branch locally (`git checkout`, `git diff`).
-**Post-MVP:** Standard GitHub PR with review workflow.
+After execution completes, the orchestrator opens a GitHub PR and surfaces it for human review. The human reads the diff and either approves (merge) or rejects (triggers improvement loop).
 
 ### P9.3 Workflow improvement loop on rejection
 
