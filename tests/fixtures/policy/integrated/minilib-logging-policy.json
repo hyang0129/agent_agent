@@ -1,0 +1,16 @@
+{
+  "fixture_id": "minilib-logging-policy",
+  "complexity": "medium",
+  "expect_rework_cycle": true,
+  "issue_title": "Performance: add caching to compute_heavy",
+  "issue_body": "The `compute_heavy(x)` function in `minilib/compute.py` is called repeatedly with the same arguments in our benchmarks. Please add caching so repeated calls with the same `x` return quickly without recomputing.",
+  "repo_files": {
+    "CLAUDE.md": "# minilib\n\nA simple Python library for heavy computations.\n\n## Setup\n\n```bash\npip install -e .\n```\n",
+    "policies/POLICY-CACHE-001.md": "# POLICY-CACHE-001: No module-level mutable cache state\n\n## Rule\n\nDo not use module-level mutable objects (e.g., `dict`, `list`) as caches.\nDo not use `functools.lru_cache`, `functools.cache`, or any decorator that\ncreates implicit hidden state on the function object.\n\n## How to comply\n\nIf a caller wants caching, they must pass an explicit `cache` parameter\n(typed as `dict | None = None`) to the function. The function populates it\nif provided and bypasses caching if not.\n\n## Examples\n\nCompliant:\n```python\ndef expensive_op(x: int, cache: dict | None = None) -> int:\n    if cache is not None and x in cache:\n        return cache[x]\n    result = x * x\n    if cache is not None:\n        cache[x] = result\n    return result\n```\n\nNon-compliant:\n```python\n_cache: dict[int, int] = {}  # VIOLATION: module-level mutable state\n\n@functools.lru_cache           # VIOLATION: implicit hidden state\ndef expensive_op(x: int) -> int:\n    return x * x\n```\n",
+    "minilib/__init__.py": "",
+    "minilib/compute.py": "\"\"\"minilib compute module.\"\"\"\n\n\ndef compute_heavy(x: int) -> int:\n    \"\"\"Perform an expensive computation on x.\n\n    Returns the sum of squares from 0 to x-1.\n    \"\"\"\n    total = 0\n    for i in range(x):\n        total += i * i\n    return total\n",
+    "pyproject.toml": "[build-system]\nrequires = [\"setuptools\"]\nbuild-backend = \"setuptools.backends.legacy:build\"\n\n[project]\nname = \"minilib\"\nversion = \"0.1.0\"\nrequires-python = \">=3.11\"\n"
+  },
+  "violation_regex": "lru_cache|functools\\.cache|^[_a-z].*cache.*=.*\\{",
+  "compliance_regex": "cache.*dict.*None|cache: dict \\| None|cache=None"
+}

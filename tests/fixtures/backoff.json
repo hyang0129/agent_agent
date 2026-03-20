@@ -1,0 +1,67 @@
+[
+  {
+    "fixture_id": "backoff-log-args",
+    "complexity": "easy",
+    "upstream": "https://github.com/litl/backoff",
+    "base_sha": "a619e1f3408961c157af810bce804b49a99b3075",
+    "license": "MIT",
+    "pr_number": 82,
+    "issue_number": 80,
+    "issue_title": "Log messages should use arguments rather than fully-formatted strings",
+    "issue_body": "Hello! My organization is using backoff version 1.8.0, and would benefit from having log messages pass variable data in as arguments (e.g. `logger.error(\"Foo: %s\", \"bar\")`) rather than logging fully formatted strings (e.g. `logger.error(\"Foo: {}\".format(\"bar\"))`). This style of logging is recommended by the python docs because it allows log sinks to process log messages in a more meaningful way. Specifically, my organization uses Sentry, which will understand that multiple calls with the same log message but different arguments represent different incidents of the same issue, but can't recognize logs as related to the same issue if arguments are pre-formatted before the string is logged. I am happy to make a pull request for this if you would like.",
+    "synthetic_issue": false,
+    "merged_from": []
+  },
+  {
+    "fixture_id": "backoff-exception-in-handlers",
+    "complexity": "medium",
+    "upstream": "https://github.com/litl/backoff",
+    "base_sha": "fe0383aaa597fa1a33294ca8eb864fa6a7614b27",
+    "license": "MIT",
+    "pr_number": 172,
+    "issue_number": 145,
+    "issue_title": "[Feature Suggestion] - Exception in _call_handlers",
+    "issue_body": "Would be great to know which exception was thrown in handlers from decorator exception tuple in `backoff.on_exception`. Maybe receive exception as extra kwargs in _call_handlers. What you guys think?",
+    "synthetic_issue": false,
+    "merged_from": []
+  },
+  {
+    "fixture_id": "backoff-dynamic-max-tries",
+    "complexity": "medium",
+    "upstream": "https://github.com/litl/backoff",
+    "base_sha": "92e7b6e910accee30118a6f3d2cef4c62caa38f5",
+    "license": "MIT",
+    "pr_number": 161,
+    "issue_number": 160,
+    "issue_title": "Behavior change when reading max_tries and max_time from callables",
+    "issue_body": "Hi there!\n\nUsing a callable to read `max_tries` and `max_time` was really useful to query an application config object. Every time the function was called, the value would be read again and so it remained configurable.\n\nAfter updating to version 2+, we realized that the `max_tries` and `max_time` are read from the callable once and then cached for every other usage of the function. We saw this when some unit tests that were testing that the application reloads the config correctly were broken.\n\nThis was really a use case for us and we're pinned to the previous version we had as we cannot recreate every other object that has a decorated function on every config reload and so we'd consider this a regression on this nice functionality.",
+    "synthetic_issue": false,
+    "merged_from": []
+  },
+  {
+    "fixture_id": "backoff-raise-on-giveup",
+    "complexity": "medium",
+    "upstream": "https://github.com/litl/backoff",
+    "base_sha": "4a4b5658abc1c168c75731c842379f1e06ac662a",
+    "license": "MIT",
+    "pr_number": 129,
+    "issue_number": 118,
+    "issue_title": "Allow Option To Disable raise in on_giveup",
+    "issue_body": "Inside of the `on_giveup` handler, I would like to continue with execution of the code calling the function with a `backoff` decorator depending on the circumstances. In other words, I would like the option to specifically re-raise or fully handle the exception. However, it would appear that no matter what you do in this handler, the exception will always be raised. Would you consider an argument like `raise_on_giveup`, a boolean which would default to `True` but could be set to `False` if you want to fully handle the exception yourself?",
+    "synthetic_issue": false,
+    "merged_from": []
+  },
+  {
+    "fixture_id": "backoff-async-event-loop-thread",
+    "complexity": "hard",
+    "upstream": "https://github.com/litl/backoff",
+    "base_sha": "2ac0b993f222664212e02cc29d3b7c74c7c0206f",
+    "license": "MIT",
+    "pr_number": 31,
+    "issue_number": 30,
+    "issue_title": "RuntimeError: There is no current event loop in thread 'Thread-1'.",
+    "issue_body": "```py\nERROR    teleflask.server.mixins._execute_command: \n         Failed calling command '/test':\n         Traceback (most recent call last):\n           ...\n           File \".../backoff/_decorator.py\", line 141, in decorate\n             if asyncio.Task.current_task() is not None:\n           ...\n         RuntimeError: There is no current event loop in thread 'Thread-1'.\n```\n\nSo what fails is: `asyncio.Task.current_task()` when called from a thread without an event loop. The actual fail in backoff is `_decorator.py` (function `def decorate(target)`) after `asyncio.iscoroutinefunction(target)` was false.\n\nMac OS 10.9.5, Python 3.6.0, backoff ~1.4.0",
+    "synthetic_issue": false,
+    "merged_from": []
+  }
+]
