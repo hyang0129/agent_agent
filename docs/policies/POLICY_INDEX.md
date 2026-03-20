@@ -2,6 +2,12 @@
 
 This index summarizes each active policy and serves as the canonical reference for Pydantic model names. Each summary provides enough context to determine whether a proposed code change is consistent with the policy. Cross-references use the format `[P{policy}.{rule}]` (e.g., `[P1.11]` = Policy 01, rule P1.11).
 
+## Purpose of Policies
+
+Policies exist to **restrict the solution space** available to agents, preventing architectural drift across successive invocations. They are not best practices or recommendations — they encode decisions that are no longer open. When an agent encounters a decision that a policy covers, the policy forecloses judgment: the decision was already made; the agent operates within the constraint.
+
+Read each policy summary as a closed constraint, not as guidance. If a proposed implementation conflicts with a policy, that is a violation — not a trade-off to weigh. See [docs/theory/policies-as-solution-space-constraints.md](../theory/policies-as-solution-space-constraints.md) for the full rationale.
+
 ---
 
 ## Model Reference
@@ -60,9 +66,9 @@ The unit of work at each level is one reviewable commit: at most 3–5 files per
 
 ## [P03 — Agent Type Taxonomy](03-agent-type-taxonomy.md)
 
-Three composite types: Plan (ResearchPlannerOrchestrator sub-agent — research + planning in a single invocation), Coding (Programmer, Tester, Debugger sub-agents), and Review (Reviewer sub-agent). Sub-agents within a composite are not exposed to the **outer** DAG as separate nodes; internally, they execute as nodes within a composite-scoped DAG [P10.2, P10.4]. There is no standalone Research agent type and no separate Commit or git composite — Programmer and Debugger handle git within their Coding composite's isolated worktree. The Plan composite is mandatory at every nesting level. Permissions are enforced at the tool layer; tool names in the permission matrix are intent-level — implementations map to SDK-specific tool names and validate against capability intent, not literal strings. New composite types must pass a four-point checklist.
+Three composite types: Plan (ResearchPlannerOrchestrator sub-agent — research + planning in a single invocation), Coding (Programmer, Tester, Debugger sub-agents), and Review (Reviewer + PolicyReviewer sub-agents, running in parallel). Sub-agents within a composite are not exposed to the **outer** DAG as separate nodes; internally, they execute as nodes within a composite-scoped DAG [P10.2, P10.4]. There is no standalone Research agent type and no separate Commit or git composite — Programmer and Debugger handle git within their Coding composite's isolated worktree. The Plan composite is mandatory at every nesting level. Permissions are enforced at the tool layer; tool names in the permission matrix are intent-level — implementations map to SDK-specific tool names and validate against capability intent, not literal strings. New composite types must pass a four-point checklist. Policy evaluation is strictly separated from code quality evaluation: Reviewer never receives the policy corpus; PolicyReviewer never evaluates correctness or style.
 
-**Violations include:** giving Programmer or Debugger the ability to create or comment on PRs; giving ResearchPlannerOrchestrator file-write tools; creating a separate Commit or git composite; adding a new composite type without the four-point checklist; any sub-agent merging PRs; invoking a sub-agent from a composite it does not belong to; a ResearchPlannerOrchestrator writing source files directly.
+**Violations include:** giving Programmer or Debugger the ability to create or comment on PRs; giving ResearchPlannerOrchestrator file-write tools; creating a separate Commit or git composite; adding a new composite type without the four-point checklist; any sub-agent merging PRs; invoking a sub-agent from a composite it does not belong to; a ResearchPlannerOrchestrator writing source files directly; injecting the policy corpus into the Reviewer's context; running PolicyReviewer sequentially after Reviewer instead of in parallel; PolicyReviewer issuing verdicts based on code quality rather than policy compliance.
 
 *See also: [P08 — Granular Agent Decomposition](#p08--granular-agent-decomposition) — permission enforcement and decomposition checklist for agent types.*
 

@@ -16,9 +16,12 @@ These three composites cover the full lifecycle of issue resolution: understand 
 | **Coding composite** | Programmer | Writes file changes that resolve the assigned sub-task. Handles git within the Coding composite's worktree. |
 | **Coding composite** | Tester | Designs the test plan for the Programmer's changes, executes the test suite, and reports results. |
 | **Coding composite** | Debugger | Diagnoses test failures and writes corrective changes. |
-| **Review composite** | Reviewer | Evaluates code quality, correctness, test coverage, and policy compliance across all Coding composite outputs. |
+| **Review composite** | Reviewer | Evaluates code quality, correctness, and test coverage across all Coding composite outputs. Does not evaluate policy compliance — that is PolicyReviewer's exclusive responsibility. |
+| **Review composite** | PolicyReviewer | Reads the target repo's CLAUDE.md and any policy documents, then evaluates the diff exclusively for policy compliance. Produces `PolicyReviewOutput` with structured citations. Runs in parallel with Reviewer within the Review composite's internal DAG. |
 
 Sub-agents are not interchangeable across composites. The Programmer cannot be invoked from the Review composite; the Reviewer cannot be invoked from the Coding composite. Sub-agents are nodes within their composite's internal DAG [P10.2, P10.4] but are opaque to the outer DAG — the Plan composite reasons about "Coding composite A," not about individual sub-agent invocations within it.
+
+The Review composite's internal DAG is a two-node parallel DAG: Reviewer and PolicyReviewer execute concurrently on the same read-only worktree. The composite merges their outputs into a single `ReviewOutput`; the final verdict is `rejected` if either sub-agent returns a blocking finding. PolicyReviewer is skipped (producing an empty `PolicyReviewOutput`) when the target repo contains no CLAUDE.md or policy documents.
 
 ### P3.3 Each sub-agent type has a single, well-defined responsibility
 
@@ -28,7 +31,10 @@ Sub-agents are not interchangeable across composites. The Programmer cannot be i
 | **Programmer** | Read files, write files, git operations within worktree | Create or comment on PRs, touch files outside worktree |
 | **Tester** | Read files, run test suite commands, write temporary/generated files during test execution | Net-modify source files committed by Programmer (validated post-execution via git diff), git operations |
 | **Debugger** | Read files, write files, git operations within worktree | Create or comment on PRs, touch files outside worktree |
-| **Reviewer** | Read files, read diffs, read git history, read GitHub PRs | Write files, touch git, merge PRs |
+| **Reviewer** | Read files, read diffs, read git history, read GitHub PRs | Write files, touch git, merge PRs, evaluate policy compliance |
+| **PolicyReviewer** | Read files, read diffs, read CLAUDE.md and policy documents | Write files, touch git, merge PRs, evaluate code quality or correctness |
+
+PolicyReviewer receives the full policy corpus in its context. Reviewer receives no policy corpus — responsibility for policy compliance is strictly separated. This prevents policy document volume from diluting the Reviewer's attention on code quality signals, and gives PolicyReviewer its own independent token budget allocation within the Review composite.
 
 ### P3.4 Sub-agent permissions are enforced at the tool layer
 
@@ -73,6 +79,10 @@ Not every DAG requires all three composites at every level. The Plan composite i
 - A Reviewer merging PRs.
 - The ResearchPlannerOrchestrator writing source files directly.
 - Invoking a sub-agent from a composite it does not belong to.
+- Injecting the policy corpus into the Reviewer's context — policy evaluation is PolicyReviewer's exclusive responsibility.
+- Injecting code quality or correctness evaluation tasks into PolicyReviewer's context.
+- Running PolicyReviewer sequentially after Reviewer — both must run in parallel within the Review composite's internal DAG.
+- PolicyReviewer producing a blocking verdict on code quality grounds (correctness, test coverage, style) — those verdicts belong to Reviewer only.
 
 ### Quick Reference
 
@@ -80,4 +90,4 @@ Not every DAG requires all three composites at every level. The Plan composite i
 |-----------|-----------|----------------|-----------------|
 | Plan | ResearchPlannerOrchestrator | Read-only analysis + DAG construction | No file writes, no PR creation |
 | Coding | Programmer, Tester, Debugger | Read/write files; run tests; git within worktree | No PR creation or comments outside worktree |
-| Review | Reviewer | Read files, diffs, git history; evaluate quality | No file writes, no git mutations, no merges |
+| Review | Reviewer, PolicyReviewer | Read files, diffs, git history; evaluate quality and policy compliance (parallel, independent) | No file writes, no git mutations, no merges; Reviewer must not evaluate policy; PolicyReviewer must not evaluate code quality |
