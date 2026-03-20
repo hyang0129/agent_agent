@@ -13,7 +13,7 @@ import shutil
 import pytest
 
 from agent_agent.agents.base import SubAgentConfig, invoke_agent
-from agent_agent.agents.tools import plan_allowed_tools
+from agent_agent.agents.tools import plan_permissions
 from agent_agent.dag.executor import AgentError, ResourceExhaustionError
 from agent_agent.models.agent import PlanOutput
 from agent_agent.models.context import (
@@ -60,7 +60,7 @@ def _make_plan_config() -> SubAgentConfig:
             'type="plan", investigation_summary="test complete", '
             "child_dag=null, discoveries=[]."
         ),
-        allowed_tools=plan_allowed_tools(),
+        permissions=plan_permissions(),
         output_model=PlanOutput,
         max_turns=5,
     )
@@ -99,7 +99,7 @@ async def test_invoke_agent_respects_max_turns() -> None:
             "You are a test agent. Investigate the repository thoroughly using many "
             "tool calls before producing output. Explore all files."
         ),
-        allowed_tools=plan_allowed_tools(),
+        permissions=plan_permissions(),
         output_model=PlanOutput,
         max_turns=1,  # Very restrictive
     )
@@ -147,7 +147,7 @@ async def test_invoke_agent_invalid_output_raises_agent_error() -> None:
             "You are a test agent. Return a minimal PlanOutput JSON with "
             'type="plan", investigation_summary="test", child_dag=null, discoveries=[].'
         ),
-        allowed_tools=plan_allowed_tools(),
+        permissions=plan_permissions(),
         output_model=ReviewOutput,  # Mismatch: expecting ReviewOutput but agent produces PlanOutput
         max_turns=5,
     )
@@ -197,7 +197,7 @@ async def test_invoke_agent_executes_tool(tmp_git_repo: object) -> None:
             'Return EXACTLY: {"type": "plan", "investigation_summary": "<what you found>", '
             '"child_dag": null, "discoveries": []}'
         ),
-        allowed_tools=plan_allowed_tools(),
+        permissions=plan_permissions(),
         output_model=PlanOutput,
         max_turns=10,
     )

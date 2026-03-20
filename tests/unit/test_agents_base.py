@@ -225,7 +225,7 @@ class TestInvokeAgentOptions:
         _, kwargs = mock_options_cls.call_args
         assert kwargs["extra_args"] == {"print": None}
         assert set(kwargs["allowed_tools"]) == {"Read", "Glob", "Grep"}
-        assert callable(kwargs["permission_mode"])
+        assert callable(kwargs["can_use_tool"])
 
 
 # ---------------------------------------------------------------------------

@@ -13,6 +13,7 @@ from typing import Any, AsyncIterator, Literal, cast
 from .tools import ToolPermission
 
 import structlog
+from claude_agent_sdk.types import PermissionResultAllow, PermissionResultDeny
 from pydantic import BaseModel, ValidationError
 
 from ..dag.executor import (
@@ -256,11 +257,11 @@ async def invoke_agent(
     # tool_name is the sole arbiter for that tool call. ToolPermission objects
     # must not overlap on tool names — enforce this in ToolPermission or
     # SubAgentConfig construction if needed.
-    def _permission_callback(tool_name: str, tool_args: dict[str, Any]) -> bool:
+    async def _can_use_tool(tool_name: str, tool_args: dict[str, Any], _ctx: Any) -> PermissionResultAllow | PermissionResultDeny:
         for perm in _permissions:
             if tool_name in perm.sdk_tool_names:
                 if perm.validate_args is None:
-                    return True
+                    return PermissionResultAllow()
                 result = perm.validate_args(tool_name, tool_args)
                 if not result:
                     _logger.warning(
@@ -269,8 +270,9 @@ async def invoke_agent(
                         tool_args=tool_args,
                         agent=_agent_name,
                     )
-                return result
-        return False  # tool not in any permission — deny
+                    return PermissionResultDeny(message=f"tool argument validation failed for {tool_name}")
+                return PermissionResultAllow()
+        return PermissionResultDeny(message=f"tool {tool_name!r} not in permissions for agent {_agent_name!r}")
 
     thinking_config: ThinkingConfigEnabled | None = None
     effort_value: Literal["low", "medium", "high", "max"] | None = None
@@ -288,7 +290,7 @@ async def invoke_agent(
         max_budget_usd=sdk_budget_backstop_usd,
         max_turns=config.max_turns,
         cwd=cwd,
-        permission_mode=_permission_callback,  # type: ignore[arg-type]  # argument-level validation callback [P3.4/P8.5]
+        can_use_tool=_can_use_tool,  # argument-level validation callback [P3.4/P8.5]
         extra_args={"print": None},
         thinking=thinking_config,
         effort=effort_value,
