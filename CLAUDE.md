@@ -80,12 +80,25 @@ ruff check src/ tests/ # lint
 ruff format src/ tests/ # format
 ```
 
+## IMPORTANT: Resolving Issues Autonomously
+
+When asked to resolve a GitHub issue on your own, follow the **Issue Resolution Team** spec:
+
+**[docs/workflows/issue-resolution-team.md](docs/workflows/issue-resolution-team.md)**
+
+This is the canonical team structure and execution protocol. Do not improvise a different workflow — use this one.
+
+Key points:
+- The **Issue Reviewer** role runs first and gates everything else. If the issue is not well-defined or would benefit from decomposition, stop and report before writing any code.
+- The **Architect** owns orchestration and ambiguity resolution. Document all ambiguities; proceed with best guess; surface `human_review_needed` items in the PR.
+- Escalate via `github_comment` — never block on stdin.
+
 ## IMPORTANT: Architecture, Design, and Review Work
 
 Before making any architectural decision, adding a new agent type, changing DAG structure, modifying context flow, scoping agent permissions, or **reviewing any design or implementation** — adhere to policies, follow best practices, and verify alignment with goals. Read the relevant indexes first:
 
 - **Goals:** `docs/goals/goals.md` — what the system is trying to achieve; every decision must align with these
-- **Policies:** `docs/policies/POLICY_INDEX.md` — active design policies (P1–P11); every architectural and design decision must be checked against the relevant policies
+- **Policies:** `docs/policies/POLICY_INDEX.md` — active design policies (P1–P12); every architectural and design decision must be checked against the relevant policies
 - **Best Practices:** `docs/best-practices/INDEX.md` — implementation guidance for recurring concerns; follow these unless a policy overrides
 
 For additional documentation (architecture decisions, ADRs, etc.) see `docs/claude.md`.

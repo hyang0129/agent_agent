@@ -2,7 +2,7 @@
 
 ## Overview
 
-This document defines the default team structure used when agent_agent resolves a GitHub issue. Every issue resolution run instantiates this six-role team. The structure is designed for issue #19 (semi-autonomous self-improvement) and first exercised on issue #14 (Write/Edit path validation).
+This document defines the default team structure used when agent_agent resolves a GitHub issue. Every issue resolution run instantiates this seven-role team. The structure is designed for issue #19 (semi-autonomous self-improvement) and first exercised on issue #14 (Write/Edit path validation).
 
 This is the authoritative default. Deviations require explicit justification committed to the state store before the run begins.
 
@@ -19,13 +19,46 @@ This is the authoritative default. Deviations require explicit justification com
 
 ## Team Roles
 
+### 0. Issue Reviewer *(Pre-execution gate)*
+
+**Purpose:** Determines whether the issue is sufficiently well-defined to execute as a single PR, or whether it should be decomposed, refined, or returned to the human before any code is written.
+
+**This role runs first and is a hard gate.** No other role starts until the Issue Reviewer produces a verdict. If the verdict is anything other than `proceed`, the run stops and the Architect posts a `github_comment` with the findings.
+
+**Responsibilities:**
+- Read the issue text, acceptance criteria, and any linked context
+- Evaluate on four dimensions:
+
+| Dimension | Question |
+|-----------|---------|
+| **Clarity** | Is the problem statement and expected outcome unambiguous? |
+| **Scope** | Can this be implemented in one PR touching ≤ 5 files with a clear completion criterion? [P02] |
+| **Prerequisites** | Are all prerequisite issues resolved, or is this blocked? |
+| **Verifiability** | Is there a clear, testable acceptance criterion? |
+
+- Produce a verdict with one of three values:
+
+| Verdict | Meaning | Next step |
+|---------|---------|-----------|
+| `proceed` | Issue is well-defined; execute as-is | Hand off to Architect for full team dispatch |
+| `decompose` | Issue is too broad for one PR; should be split | Post decomposition proposal as `github_comment`; stop |
+| `refine` | Issue is under-defined or ambiguous in a way that cannot be resolved from existing policies or context | Post specific clarifying questions as `github_comment`; stop |
+
+- When verdict is `decompose`: propose a concrete split — name each sub-issue, its scope, and its dependency order
+- When verdict is `refine`: list each blocking ambiguity as a specific question; do not guess
+- When verdict is `proceed`: summarise any minor ambiguities that were resolved by policy or context so the Architect has them in shared context from the start
+
+**The Issue Reviewer does not write code, create branches, or modify any files.**
+
+---
+
 ### 1. Architect *(Orchestration lead)*
 
 **Purpose:** Ensures the overall execution stays aligned with the project's goals and policies. The Architect owns orchestration — it dispatches work to other roles and integrates their outputs into a coherent result.
 
 **Responsibilities:**
+- Receives the Issue Reviewer's `proceed` verdict and any pre-resolved ambiguities
 - Read the issue, goals, and relevant policies before dispatching any work
-- Confirm the issue is well-scoped and eligible before starting a DAG run
 - Dispatch Planner, Coder, Reviewer, Tester, and Policy Reviewer in the correct sequence
 - Resolve ambiguities with **strict preference for policy compliance**
 - When a decision is genuinely ambiguous: document the ambiguity, record the chosen interpretation in shared context, and proceed with best guess — do not pause for human input unless the issue is a safety violation or the ambiguity cannot be resolved within existing policies
@@ -108,23 +141,29 @@ This is the authoritative default. Deviations require explicit justification com
 ## Execution Order
 
 ```
-Architect
+Issue Reviewer
     │
-    ├─► Planner ──────────────────────────────────┐
-    │       │                                     │
-    │       ▼                                     │
-    │   Policy Reviewer (pre-implementation)      │
-    │       │                                     │
-    │       ▼                                     │
-    │     Coder ──────────────────────────────────┤
-    │       │                                     │
-    │       ├─► Reviewer ◄──────────────────────►─┤
-    │       └─► Policy Reviewer (post-impl) ◄──►──┤
-    │                   │                         │
-    │                   ▼                         │
-    │               Tester ──────────────────────►┘
-    │                   │
-    └─► Architect (integrate results → PR)
+    ├─► verdict: refine / decompose → github_comment → STOP
+    │
+    └─► verdict: proceed
+            │
+          Architect
+            │
+            ├─► Planner ──────────────────────────────────┐
+            │       │                                     │
+            │       ▼                                     │
+            │   Policy Reviewer (pre-implementation)      │
+            │       │                                     │
+            │       ▼                                     │
+            │     Coder ──────────────────────────────────┤
+            │       │                                     │
+            │       ├─► Reviewer ◄──────────────────────►─┤
+            │       └─► Policy Reviewer (post-impl) ◄──►──┤
+            │                   │                         │
+            │                   ▼                         │
+            │               Tester ──────────────────────►┘
+            │                   │
+            └─► Architect (integrate results → PR)
 ```
 
 Reviewer and Policy Reviewer run in parallel after Coder completes [P03].
