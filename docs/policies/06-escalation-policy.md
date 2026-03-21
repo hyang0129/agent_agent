@@ -138,6 +138,24 @@ class EscalationConfig(BaseModel):
 
 **P6.6c** The `severity_filter` allows suppressing LOW-severity escalations. LOW events are still logged.
 
+### P6.9 Worker escalation model — fire-and-release
+
+In worker context (`agent-agent worker`), the minimum required escalation channel is `github_comment`. The CLI channel is not applicable to workers — workers run headless with no attached terminal. This is not configurable: workers override any escalation channel setting to `github_comment` unconditionally.
+
+The pause-and-poll model (where the orchestrator pauses the DAG and waits for a human response) does NOT apply in worker context. The worker escalation model is fire-and-release:
+
+1. Worker posts a structured P6.4 escalation comment to the GitHub issue.
+2. Worker releases the claim (via `POST /claims/{url}/release` with `status=failed`).
+3. The DAG becomes stale — the hosted server detects the lapsed heartbeat and marks the claim `stale`, swapping the GitHub label to `agent-stale`.
+4. Human reviews the escalation comment and re-applies `agent-ready`.
+5. A new worker claims the issue, sees the existing `dag_run_id`, and attempts resumption per P12.11.
+
+There is no timeout mechanism in worker escalation — the DAG does not expire; it simply sits stale until a human reviews it. The `timeout_seconds` and `timeout_action` fields from P6.6 apply only to interactive (`agent-agent run`) escalations.
+
+**P6.9a** The escalation comment (step 1) MUST be posted before the claim is released (step 2). Silent claim release without a preceding escalation comment is prohibited.
+
+**P6.9b** Workers MUST NOT poll for a human response via GitHub comment after posting an escalation. Post the comment, release the claim, and exit.
+
 ### P6.7 Anti-fatigue measures
 
 **P6.7a Batch non-urgent escalations.** If multiple nodes fail in the same run, batch them into a single escalation message.
@@ -168,6 +186,9 @@ class EscalationConfig(BaseModel):
 - Discarding completed node outputs when a run fails.
 - Retrying after a safety violation [P6.1d] — safety violations escalate immediately, no retry.
 - Escalating for a deterministic error without first checking whether retries were exhausted (deterministic errors skip the retry step entirely).
+- A worker treating escalation as a pause-and-poll (waiting for human response via GitHub comment polling) instead of fire-and-release [worker escalation rule].
+- A worker using the CLI escalation channel in worker mode [P12.9].
+- An escalation in worker context that does not post a `github_comment` before releasing the claim — silent claim release without escalation comment is prohibited [P6.9a].
 
 ### Quick Reference
 
@@ -180,3 +201,9 @@ class EscalationConfig(BaseModel):
 | Retry exhaustion [P6.1a] | MEDIUM | N/A (retries are done) |
 | Budget exhaustion [P6.1b] | MEDIUM | No |
 | Transient error | — | Yes (up to retry budget) |
+
+### Quick Reference — Escalation Context
+
+| Context | Mode | Behaviour |
+|---------|------|-----------|
+| Worker mode | `agent-agent worker` | Required channel: `github_comment`; model: fire-and-release (post comment → release claim → DAG goes stale → human re-queues) |
