@@ -2,6 +2,8 @@
 
 A worker is a long-running process that autonomously claims GitHub issues from a human-curated queue, executes DAG runs against them, and reports results. Workers are the execution substrate for the semi-autonomous self-improvement milestone: humans dispatch work by applying labels; workers claim, execute, and report without further human involvement until the PR review checkpoint [P9.2]. This policy governs the complete worker lifecycle — identity, claim coordination, issue eligibility, budget assignment, and observability — as a single closed constraint set. These rules exist because the worker layer introduces new coordination problems (concurrent claiming, crash recovery, mid-run cancellation) that existing policies do not cover, and because workers operate unattended: mistakes compound silently rather than being caught at an interactive checkpoint.
 
+**Architectural note:** The worker (`agent-agent worker`) is a developer tool — a standalone CLI process that developers run manually in local or dev-container environments. It is entirely independent of the DAG orchestration server (`server.py` / FastAPI). The server is a read-only observability surface; the worker is the execution engine. They share the same Postgres state store but are separate processes with separate lifecycles. Nothing in this policy governs the server, and nothing in the server policy governs the worker.
+
 ---
 
 ## Identity and Registration
