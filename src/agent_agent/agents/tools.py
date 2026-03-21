@@ -60,6 +60,22 @@ def _make_worktree_bash_validator(worktree_root: str) -> Callable[[str, dict[str
     return _validator
 
 
+def _make_write_path_validator(worktree_root: str) -> Callable[[str, dict[str, Any]], bool]:
+    """Return a closure that restricts Write/Edit to paths within worktree_root [P8.5/P10.13].
+
+    - Absolute paths not under worktree_root → denied
+    - Relative paths → allowed (cwd is set to worktree_root for sub-agents)
+    """
+
+    def _validator(tool_name: str, tool_args: dict[str, Any]) -> bool:
+        file_path = tool_args.get("file_path", "")
+        if file_path.startswith("/") and not file_path.startswith(worktree_root):
+            return False
+        return True
+
+    return _validator
+
+
 # ---------------------------------------------------------------------------
 # Permission functions
 # ---------------------------------------------------------------------------
@@ -76,7 +92,11 @@ def plan_permissions() -> list[ToolPermission]:
 def programmer_permissions(worktree_root: str) -> list[ToolPermission]:
     """Programmer: read + write + git within worktree [P3.3/P10.13]."""
     return [
-        ToolPermission(sdk_tool_names=frozenset({"Read", "Glob", "Grep", "Write", "Edit"})),
+        ToolPermission(sdk_tool_names=frozenset({"Read", "Glob", "Grep"})),
+        ToolPermission(
+            sdk_tool_names=frozenset({"Write", "Edit"}),
+            validate_args=_make_write_path_validator(worktree_root),
+        ),
         ToolPermission(
             sdk_tool_names=frozenset({"Bash"}),
             validate_args=_make_worktree_bash_validator(worktree_root),
@@ -95,7 +115,11 @@ def test_designer_permissions() -> list[ToolPermission]:
 def test_executor_permissions(worktree_root: str) -> list[ToolPermission]:
     """Test Executor: read + write + run tests [P3.3]."""
     return [
-        ToolPermission(sdk_tool_names=frozenset({"Read", "Glob", "Grep", "Write", "Edit"})),
+        ToolPermission(sdk_tool_names=frozenset({"Read", "Glob", "Grep"})),
+        ToolPermission(
+            sdk_tool_names=frozenset({"Write", "Edit"}),
+            validate_args=_make_write_path_validator(worktree_root),
+        ),
         ToolPermission(
             sdk_tool_names=frozenset({"Bash"}),
             validate_args=_make_worktree_bash_validator(worktree_root),

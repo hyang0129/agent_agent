@@ -17,6 +17,7 @@ from agent_agent.agents.base import (
 )
 from agent_agent.agents.tools import (
     ToolPermission,
+    _make_write_path_validator,
     debugger_allowed_tools,
     plan_allowed_tools,
     programmer_allowed_tools,
@@ -25,6 +26,7 @@ from agent_agent.agents.tools import (
     reviewer_permissions,
     test_designer_allowed_tools,
     test_executor_allowed_tools as te_allowed_tools,
+    test_executor_permissions as te_permissions,
 )
 from agent_agent.dag.executor import (
     AgentError,
@@ -269,6 +271,63 @@ class TestAllowedToolFunctions:
         tools = set(te_allowed_tools())
         assert "Bash" in tools
         assert "Read" in tools
+
+
+# ---------------------------------------------------------------------------
+# Write/Edit path validator tests [P8.5/P10.13]
+# ---------------------------------------------------------------------------
+
+
+class TestWritePathValidator:
+    """Unit tests for _make_write_path_validator [P8.5/P10.13]."""
+
+    WORKTREE = "/tmp/worktrees/node-abc"
+
+    def _validator(self):  # type: ignore[no-untyped-def]
+        return _make_write_path_validator(self.WORKTREE)
+
+    def test_write_inside_worktree_allowed(self) -> None:
+        """Write with a path inside the worktree is allowed [P8.5]."""
+        v = self._validator()
+        assert v("Write", {"file_path": f"{self.WORKTREE}/src/foo.py"}) is True
+
+    def test_write_outside_worktree_denied(self) -> None:
+        """Write with an absolute path outside the worktree is denied [P8.5/P10.13]."""
+        v = self._validator()
+        assert v("Write", {"file_path": "/etc/passwd"}) is False
+
+    def test_edit_outside_worktree_denied(self) -> None:
+        """Edit with an absolute path outside the worktree is denied [P8.5/P10.13]."""
+        v = self._validator()
+        assert v("Edit", {"file_path": "/home/other/secret.py"}) is False
+
+    def test_relative_path_allowed(self) -> None:
+        """Relative paths are allowed — cwd is the worktree for sub-agents."""
+        v = self._validator()
+        assert v("Write", {"file_path": "src/foo.py"}) is True
+
+    def test_read_not_restricted_by_write_validator(self) -> None:
+        """Read is in its own ToolPermission without the write validator; any path is allowed."""
+        # programmer_permissions separates Read into a no-validator ToolPermission
+        perms = programmer_permissions(self.WORKTREE)
+        read_perm = next(p for p in perms if "Read" in p.sdk_tool_names)
+        assert read_perm.validate_args is None
+
+    def test_write_edit_perm_has_validator_in_programmer(self) -> None:
+        """programmer_permissions wires _make_write_path_validator onto Write/Edit [P8.5]."""
+        perms = programmer_permissions(self.WORKTREE)
+        write_perm = next(p for p in perms if "Write" in p.sdk_tool_names)
+        assert write_perm.validate_args is not None
+        assert write_perm.validate_args("Write", {"file_path": "/etc/passwd"}) is False
+        assert write_perm.validate_args("Write", {"file_path": f"{self.WORKTREE}/x.py"}) is True
+
+    def test_write_edit_perm_has_validator_in_test_executor(self) -> None:
+        """test_executor_permissions wires _make_write_path_validator onto Write/Edit [P8.5]."""
+        perms = te_permissions(self.WORKTREE)
+        write_perm = next(p for p in perms if "Write" in p.sdk_tool_names)
+        assert write_perm.validate_args is not None
+        assert write_perm.validate_args("Edit", {"file_path": "/root/.bashrc"}) is False
+        assert write_perm.validate_args("Edit", {"file_path": f"{self.WORKTREE}/test_x.py"}) is True
 
 
 # ---------------------------------------------------------------------------
