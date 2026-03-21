@@ -1,253 +1,187 @@
-# Policy 12: Worker Management
+# Policy 12 — Worker Management
 
-A worker is a long-running process that autonomously claims GitHub issues from a human-curated queue, executes DAG runs against them, and reports results. Workers are the execution substrate for the semi-autonomous self-improvement milestone: humans dispatch work by applying labels; workers claim, execute, and report without further human involvement until the PR review checkpoint [P9.2]. This policy governs the complete worker lifecycle — identity, claim coordination, issue eligibility, budget assignment, and observability — as a single closed constraint set. These rules exist because the worker layer introduces new coordination problems (concurrent claiming, crash recovery, mid-run cancellation) that existing policies do not cover, and because workers operate unattended: mistakes compound silently rather than being caught at an interactive checkpoint.
-
----
-
-## Identity and Registration
-
-### P12.1 Worker ID is generated at process start and is non-configurable
-
-Every `agent-agent worker` process generates a `worker_id` via `uuid4()` on startup. The `worker_id` is never read from configuration, environment variables, or persistent storage, and is never reused across restarts. If the same container restarts, it gets a new `worker_id`. This ensures that a claim held by a crashed process cannot be silently re-adopted under the same identity.
-
-### P12.2 Workers write a registration record before polling begins
-
-Before the first poll cycle, a worker MUST write a registration record containing exactly these fields:
-
-| Field | Type | Description |
-|-------|------|-------------|
-| `worker_id` | UUID | Generated at startup [P12.1] |
-| `hostname` | str | `socket.gethostname()` |
-| `pid` | int | `os.getpid()` |
-| `started_at` | timestamptz | Process start time |
-| `version` | str | `agent_agent.__version__` |
-| `mode` | `"continuous" \| "once"` | Whether the worker loops or exits after one claim |
-
-Fields not in this list require a policy amendment before addition. This is not a freeze against legitimate operational needs — it is a forcing function to ensure additions are deliberate. Fields MUST NOT carry per-issue or per-run state; that belongs in `work_claims` and `dag_runs`.
-
-### P12.3 Staleness is defined by a fixed formula and is computed at read time only
-
-Workers update `last_heartbeat_at` in their active `work_claims` row at a fixed interval defined in config (`WORKER_HEARTBEAT_INTERVAL_SECONDS`, default 30 s). A claim is stale when:
-
-```
-now() - last_heartbeat_at > 5 * WORKER_HEARTBEAT_INTERVAL_SECONDS
-```
-
-This formula is the **sole definition of stale**. The 5× multiplier matches the lower bound of production job queue systems (Solid Queue: 5×, Sidekiq: 6×, pg-boss: 6×); the commonly cited 3× floor is too aggressive for containerised environments where a slow database write or network jitter can delay a heartbeat without indicating a dead worker.
-
-Staleness is a read-time computation evaluated by the querying component (bookkeeping server, `agent-agent status` command, a worker polling for candidates). No process writes `stale` to `work_claims.status` — the written statuses are defined in the next section.
+Workers are the execution layer of the agent_agent system. A worker is a process that claims GitHub issues from a hosted server, runs a DAG against each issue, and reports results — all without direct database access. This policy governs the architectural boundary between workers and the hosted server, the per-issue lifecycle, crash recovery, checkpoint pushes, and the test double. These rules exist because workers operate unattended and must fail safely: the hosted server is the sole coordinator and sole Postgres writer; workers are stateless HTTPS clients that neither share nor persist state locally.
 
 ---
 
-## Claim Lifecycle
+## Coordination Model
 
-### P12.4 The work_claims state machine has four written statuses
+### P12.1 The hosted server is the sole coordinator and sole Postgres writer
 
-The `status` column in `work_claims` accepts exactly four written values: `running`, `completed`, `failed`, `abandoned`. The legal state machine:
+All persistent state lives in Postgres on the hosted server. Workers have no `DATABASE_URL` and no direct database access. Every state write a worker needs — claim creation, status updates, heartbeats, node outputs — is made via HTTPS to the hosted server. Any worker that writes to Postgres directly violates this policy regardless of whether it holds a valid credential.
 
-```
-          [initial claim]
-                │
-                ▼
-             running ◄────────────────────────────────────────┐
-                │                                             │
-     ┌──────────┼──────────────┐                   (reclaim after stale:
-     ▼          ▼              ▼                    conditional UPDATE)
- completed    failed       abandoned
-```
+### P12.2 StateStore is a typed protocol; workers use HTTPStateStore exclusively
 
-Transitions not shown are illegal — in particular, all terminal states (`completed`, `failed`, `abandoned`) are irreversible. A stale claim (by the formula in P12.3) is reclaimed via a conditional UPDATE that resets `worker_id`, `claimed_at`, and `last_heartbeat_at` to the new worker's values and sets `status = 'running'`. This is not a new INSERT — the row persists to preserve the `dag_run_id` reference for crash recovery [P12.7].
+`StateStore` is a `typing.Protocol`. The server-side implementation is `SQLAlchemyStateStore`. The worker-side implementation is `HTTPStateStore`, a thin HTTPS client that forwards all reads and writes to the hosted server. Workers MUST instantiate `HTTPStateStore` and MUST NOT instantiate `SQLAlchemyStateStore`. The `Orchestrator` accepts any `StateStore` implementation — this is the extension point, not a bypass for the database-access rule.
 
-### P12.5 The holding worker process is the sole writer to work_claims.status
+### P12.3 Workers require exactly these settings; DATABASE_URL must be absent
 
-The following components MUST NOT write to `work_claims.status`: agent composites, the bookkeeping server, the `agent-agent status` CLI command, background jobs, or any process that is not the worker process holding the claim. This applies even if those components have database credentials. The sole writers are the worker holding the claim, and any worker performing a reclaim on a stale row.
+Workers MUST be configured with:
 
-### P12.6 A claim transitions to completed only after the GitHub PR URL is confirmed
+| Setting | Description |
+|---------|-------------|
+| `AGENT_AGENT_SERVER_URL` | Base URL of the hosted server |
+| `AGENT_AGENT_SERVER_TOKEN` | Bearer token for HTTPS calls to the hosted server |
+| `AGENT_AGENT_GIT_PUSH_ENABLED=true` | Required in all non-dev environments |
+| `GITHUB_TOKEN` | Required for repository and issue operations (see below) |
 
-The required sequence:
-1. DAG run reaches terminal `completed` state
-2. Orchestrator opens the GitHub PR [P9.2]
-3. PR URL is written to `dag_runs`
-4. Worker sets `work_claims.status = 'completed'`
+Workers require `GITHUB_TOKEN` for:
+- `git clone` of the target repository (if private)
+- Opening GitHub PRs after successful DAG execution [P9.2]
+- Posting structured escalation comments to GitHub issues [P6.4, P12.9]
 
-If step 2 or 3 fails after a completed DAG run, the claim remains `running` and the failure is escalated as a deterministic error [P6.1c]. Marking a claim `completed` before the PR URL is in `dag_runs` is a violation regardless of DAG run outcome.
+`GITHUB_TOKEN` on workers is scoped to repository operations and issue comments. GitHub label management is NOT performed by workers — that is exclusively the server's responsibility [P12.6]. Workers must not call any label mutation API even if their token has the permission.
 
-### P12.7 Reclaiming a stale claim requires a resumption check before starting a new DAG run
+The server also holds a `GITHUB_TOKEN` for label management. Both holding the token is correct — the responsibilities are distinct.
 
-When a worker reclaims a stale claim, it MUST check the existing `dag_run_id` before starting a new DAG run:
-
-- **Resumable** (existing run is non-terminal and the worktree can be reconstructed): resume from the last completed node. Completed node outputs are never discarded [P6.5a].
-- **Not resumable** (worktree lost, state corrupt, or run already terminal): transition the existing run to `failed`, post a `github_comment` escalation with partial results [P6.5b–c], then start a fresh DAG run under a new `dag_run_id`.
-
-Starting a fresh run without attempting resumption first is a P6.5a violation.
-
-> **Intentional divergence from industry norm.** Production job queue systems (Sidekiq, Celery, Oban, pg-boss) universally use *restart* semantics after a worker crash: the job is requeued and re-executed from the beginning. Resumption is rare because it requires persistent intermediate state. This policy requires resumption-first because P6.5a prohibits discarding completed node outputs, and a DAG run may have completed expensive Plan or Coding composite nodes before the worker crashed. The cost of implementing resumption is accepted in exchange for not re-billing and re-executing work that already succeeded. If resumption proves too complex to implement reliably, a policy amendment is required — do not silently downgrade to restart semantics.
-
-### P12.8 The abandoned state covers all mid-run human or environmental interruptions
-
-A worker MUST transition a claim to `abandoned` — and MUST NOT start any new DAG node — when any of the following are detected during the heartbeat cycle:
-
-| Trigger | Detection |
-|---------|-----------|
-| Human cancellation | `agent-running` label absent from issue |
-| Issue closed | GitHub API reports issue `state = 'closed'` |
-| Target repo unreachable | GitHub API returns 404 or 403 for the repo |
-
-On detecting any abandonment trigger the worker MUST:
-
-1. Complete the current atomic sub-operation (a git commit, a file write, an in-flight SDK call) but MUST NOT start the next DAG node.
-2. Post a `github_comment` escalation documenting: the trigger, which nodes completed, which were in-progress, and any partial results [P6.5].
-3. Remove `agent-running` label if present; apply `agent-stale` label.
-4. Set `work_claims.status = 'abandoned'` and exit.
-
-`abandoned` is terminal. Re-queuing requires a human to remove `agent-stale`, review the escalation, and re-apply `agent-ready`.
+Workers MUST NOT have `DATABASE_URL` set. If `DATABASE_URL` is present in the environment, the worker MUST refuse to start with a clear error message. If `AGENT_AGENT_GIT_PUSH_ENABLED` is `false` in a non-dev environment, the worker MUST also refuse to start. If `GITHUB_TOKEN` is absent, the worker MUST refuse to start with a clear error message.
 
 ---
 
-## Issue Eligibility and Budget
+## Worker Types
 
-### P12.9 A worker MUST pass all eligibility checks before attempting a claim
+### P12.4 Two worker types exist; they share the same per-issue protocol
 
-Before any claim attempt, a worker MUST verify all of the following. Failure on any check produces a `worker.claim_skipped` event [P12.13] with an enumerated `skip_reason` — not an escalation. Eligibility checks are read-only.
+- **Immediate worker**: persistent process, manually started, polls `GET /claims/available` continuously and handles many issues sequentially. Invoked as `agent-agent worker --id <name>`.
+- **Future worker**: ephemeral, handles one issue then exits, spawned by external orchestration. Invoked as `agent-agent worker --id <name> --once [--issue-url <url>]`. If `--issue-url` is provided, the worker skips polling and claims that specific issue directly.
 
-| Check | Pass condition |
-|-------|---------------|
-| Label state | Issue has `agent-ready`; does NOT have `agent-running` or `agent-stale` |
-| No active claim | No row in `work_claims` for this `issue_url` with `status = 'running'` and `last_heartbeat_at` within the stale threshold [P12.3] |
-| No open agent PR | No open PR with branch prefix `agent/<issue-number>/` on the repo |
-| Issue is open | GitHub API reports issue `state = 'open'` |
-| Branch writable | GitHub Collaborator Permission API (`GET /repos/{owner}/{repo}/collaborators/{username}/permission`) confirms at least `write` access. Dry-run pushes MUST NOT be used for this check. |
-
-### P12.10 After a successful claim, the worker MUST re-run all eligibility checks before starting a DAG run
-
-The pre-claim checks in P12.9 have a TOCTOU window between the check and the atomic INSERT. After a successful claim, the worker MUST re-run every P12.9 eligibility check before starting the DAG run. If any check fails:
-
-- Transition claim to `abandoned`
-- Do not start a DAG run
-- Do not post a GitHub escalation comment (this is a pre-run eligibility failure, not a mid-run disruption)
-- Emit `worker.claim_abandoned` with `abandon_reason` set to the failing check's `SkipReason` value suffixed with `"_post_claim"`
-
-This three-step pattern — pre-claim filter → atomic claim → post-claim recheck — combines the efficiency of filtering obvious non-starters before claiming with the correctness of catching state changes in the TOCTOU window. It requires no additional state and produces no claiming loops: persistent failure conditions are caught in the pre-claim filter and never result in a claim; transient window failures are caught post-claim and produce a terminal `abandoned` state.
-
-### P12.11 A worker MUST NOT claim a running, non-stale issue
-
-A worker MUST skip any issue whose `work_claims` row has `status = 'running'` and is not yet stale per P12.3. This applies unconditionally — `worker_id` matching between the current worker and the claimant is irrelevant to eligibility.
-
-### P12.12 Budget is set by configuration; the worker MUST NOT compute it
-
-The worker reads `WORKER_RUN_BUDGET_USD` from the active configuration profile and passes it unchanged as `budget_usd` to the `DAGRun` constructor. This preserves the P7.1 invariant that budget is set at run creation by human-controlled configuration. If `WORKER_RUN_BUDGET_USD` is absent, the worker MUST exit with a non-zero status — no code-level default is permitted. Budget increases during a run follow the escalation path [P7.1, P6.1b].
-
-Per-repo worker concurrency is capped at `WORKER_MAX_CONCURRENT_PER_REPO` (default: 2; configurable). This default reflects GitHub's secondary rate limits for repository write operations and the `agent/<issue-number>/` branch namespace. The cap MUST be enforced atomically as part of the claim operation itself — a subquery count checked inside the claiming CTE — not as a separate pre-claim read. A pre-claim count followed by a separate claim write has a TOCTOU race where two workers simultaneously read N-1 active claims and both proceed, briefly exceeding the cap. When the cap blocks a claim, the worker emits one `worker.repo_concurrency_limit_reached` event for that repo and skips all remaining candidates from it in the current poll cycle.
+Both types execute each issue using the identical per-issue protocol defined in P12.5–P12.9. The distinction is lifetime only: immediate workers loop; future workers exit after one issue.
 
 ---
 
-## Observability
+## Per-Issue Lifecycle
 
-### P12.13 Worker events use the same emit_event path as DAG events
+### P12.5 The per-issue lifecycle has six mandatory steps
 
-Worker events MUST be emitted via the `emit_event` call defined in P11 P1 — not a separate logging path. P11 P3 requires `dag_run_id` and `node_id` on every record; this policy extends that rule: worker events that predate a successful claim use `dag_run_id: null` and `node_id: null`. Once a claim is acquired, all subsequent events for that claim MUST include the assigned `dag_run_id`.
+Every worker — immediate or future — MUST execute the following sequence for each issue:
 
-`worker_id` is mandatory on every worker event. It is bound to the `structlog` context at startup, before the registration record is written, and propagates automatically to all log records for the worker's lifetime.
+1. Poll `GET /claims/available` (or use `--issue-url` if provided).
+2. `POST /claims` with `{issue_url, worker_id, dag_run_id}`. The server handles atomicity. A 409 response means another worker claimed the issue first; re-poll.
+3. `git clone` the target repo into `tempfile.mkdtemp()`. Validate `CLAUDE.md` and the policy index before proceeding.
+4. Run `Orchestrator` with `HTTPStateStore` — all state writes go to the hosted server via HTTPS.
+5. After each coding node completes, push the branch to remote (checkpoint push — see P12.8).
+6. `POST /claims/{issue_url}/release`; `rm -rf` the temp clone.
 
-### P12.14 The following worker events are mandatory
+No step may be skipped. The temp clone MUST be deleted whether the run succeeds, fails, or is abandoned.
 
-| Event name | When emitted | Required extra fields |
-|------------|-------------|----------------------|
-| `worker.started` | After registration record written | `mode`, `version`, `hostname`, `pid` |
-| `worker.claim_attempted` | Before each claim attempt | `issue_url` |
-| `worker.claim_acquired` | After successful claim | `issue_url`, `dag_run_id` |
-| `worker.claim_skipped` | When eligibility check fails [P12.9] | `issue_url`, `skip_reason` |
-| `worker.repo_concurrency_limit_reached` | When per-repo cap hit [P12.12] | `repo_url`, `active_claim_count` |
-| `worker.heartbeat` | On each heartbeat write | `issue_url`, `dag_run_id`, `dag_status` |
-| `worker.label_transition` | When worker applies a label change | `issue_url`, `from_label`, `to_label` |
-| `worker.claim_completed` | Claim → `completed` | `issue_url`, `dag_run_id`, `pr_url` |
-| `worker.claim_failed` | Claim → `failed` | `issue_url`, `dag_run_id`, `failure_reason` |
-| `worker.claim_abandoned` | Claim → `abandoned` | `issue_url`, `dag_run_id`, `abandon_reason` |
-| `worker.stopped` | On clean shutdown | `claims_completed`, `claims_failed`, `claims_abandoned` |
+### P12.6 Label transitions are server-owned; workers perform no GitHub label operations
 
-**Poll-cycle events are not emitted.** High-frequency per-cycle events (e.g., `worker.poll_cycle`) generate low-signal noise at Level 2 retention volume. The per-candidate events above (`worker.claim_attempted`, `worker.claim_skipped`, `worker.repo_concurrency_limit_reached`) capture poll-cycle outcomes with signal. A cycle that finds zero eligible candidates produces no events.
+| Event | Label change | Responsibility |
+|-------|-------------|----------------|
+| Claim processed | remove `agent-ready`, add `agent-running` | Server (when it processes `POST /claims`) |
+| Run completed | remove `agent-running` | Server (when it processes `POST /claims/{url}/release` with `status=completed`) |
+| Stale detected | remove `agent-running`, add `agent-stale` | Server (background task — see P12.10) |
+| Human re-queues | add `agent-ready` | Human only — never automated |
 
-The `skip_reason` field in `worker.claim_skipped` MUST be a value from the `SkipReason` enum in `models/worker.py`. Permitted values:
+Workers are pure DAG executors. They communicate state changes (claim, heartbeat, release) to the server via HTTPS; the server owns all side effects of those state changes, including every GitHub label transition. Workers MUST NOT call any GitHub label mutation API (add or remove any label) directly, even if their `GITHUB_TOKEN` has the permission to do so. Label management is exclusively the server's responsibility.
 
-| Value | Meaning |
-|-------|---------|
-| `active_claim_exists` | Non-stale running claim already held |
-| `label_state_invalid` | `agent-ready` absent or blocking label present |
-| `open_agent_pr_exists` | Open PR with matching branch prefix already exists |
-| `issue_not_open` | Issue state is not `open` |
-| `insufficient_repo_permissions` | Worker token lacks write access |
+---
 
-The enum MUST NOT include a catch-all (`OTHER`, `UNKNOWN`, or equivalent). New skip conditions require a policy amendment to add a new enum value.
+## Heartbeat
 
-### P12.15 Worker events share the DAG event table and follow P11 retention rules
+### P12.7 Workers send a heartbeat every 60 seconds during execution
 
-Worker events are Level 2 (metrics) data stored in the same `node_events` table as DAG events — not a separate table or log file. They are retained for 90 days consistent with P11. Worker events are distinguished from DAG events by `dag_run_id: null` (pre-claim) and by the `worker.*` event name prefix.
+During active execution of an issue, the worker MUST send `POST /claims/{issue_url}/heartbeat` every 60 seconds. The purpose of heartbeats is to allow the hosted server to detect dead workers. Workers MUST NOT implement stale detection logic themselves — stale detection is entirely a server responsibility (P12.10).
 
-The bookkeeping server MUST expose:
+---
 
-```
-GET /api/v1/workers
-```
-Non-stale workers (heartbeat within `5 * WORKER_HEARTBEAT_INTERVAL_SECONDS`) with their current claim. Computable from `work_claims` without a background aggregation job.
+## Stale Detection
 
-```
-GET /api/v1/workers/{worker_id}/events
-```
-Chronological `worker.*` events for the given worker. Supports `?since=` and `?limit=`. Primary diagnostic surface for "why isn't this issue being claimed?"
+### P12.10 Stale detection is a hosted-server responsibility, not a worker responsibility
 
-```
-GET /api/v1/queue/age
-```
-Age in seconds of the oldest `agent-ready` issue that has no active non-stale claim. This is the single most important leading indicator of worker health — it rises before queue depth does and distinguishes "workers are busy" from "workers are broken." An alert threshold on this value (e.g., P99 age > 10 minutes) provides earlier warning than alerting on queue depth alone.
+The hosted server runs a background task every 60 seconds that queries for claims where `last_heartbeat_at < now - 10 minutes AND status = 'running'`. For each stale claim the server:
 
-These endpoints are provisional — a dedicated bookkeeping server API policy will supersede this rule when the server's full API surface is governed.
+- Marks `status = stale`.
+- Swaps the GitHub label `agent-running → agent-stale`.
+- Emits a Level 1 observability event.
+
+Workers MUST NOT scan for stale claims on startup or at any other time. Workers MUST NOT write `status = stale`. This responsibility is entirely server-owned.
+
+---
+
+## Crash Recovery
+
+### P12.11 Crash recovery is triggered by a human re-applying agent-ready; resumption is mandatory
+
+When a human re-applies `agent-ready` after reviewing a stale escalation, the next worker to claim the issue follows this protocol:
+
+1. The claim row contains a non-null `dag_run_id`. The worker MUST treat this as a resumption candidate — never silently start a fresh run.
+2. The worker checks whether the `branch_name` from `dag_nodes` exists on the remote using `git ls-remote`.
+3. **Branch exists**: checkout a fresh clone from the remote branch, reset all `status=running` nodes to `pending`, and resume from the last completed node. Completed node outputs are never discarded [P6.5a].
+4. **Branch absent**: escalate via `github_comment`, then release the claim as `failed`.
+
+Silently starting a fresh run when `dag_run_id` is non-null is a violation of this policy and of P6.5a. Resumption is node-level only — a crashed node is reset to `pending` and re-executed from the beginning; there is no mid-node resumption.
+
+---
+
+## Checkpoint Pushes
+
+### P12.8 Workers must push a checkpoint branch to remote after each coding node completes
+
+After each coding node completes successfully, the worker MUST push the current branch to the remote. This checkpoint is the recovery surface used by P12.11 crash recovery: without it, a remote branch does not exist and the crashed run cannot be resumed.
+
+- Guarded by `git_push_enabled`. In non-dev environments, `git_push_enabled=false` is a misconfiguration; workers refuse to start [P12.3].
+- On push failure: retry 3× with exponential backoff.
+- On persistent push failure: escalate via `github_comment` with a message that clearly states "branch not pushed; crash recovery degraded". Do not treat a failed checkpoint push as a silent warning.
+
+---
+
+## Escalation Channel
+
+### P12.9 Workers must use the github_comment escalation channel unconditionally
+
+`github_comment` is the **only** valid escalation channel in worker mode — not a default, not a preference, the sole permitted channel. The CLI escalation channel is a separate path for interactive `agent-agent run` usage (with a terminal attached); it does not apply to workers at all.
+
+If `AGENT_AGENT_ESCALATION_CHANNEL=cli` is set in the environment, the worker MUST silently override it to `github_comment` and emit a WARNING-level structlog record. This is not a startup error — silent correction is preferred over blocking the worker.
+
+The worker escalation model is **fire-and-release**: post the `github_comment`, then release the claim. Workers MUST NOT pause and poll for a human response after posting an escalation comment. See P6 for the full worker escalation model.
+
+---
+
+## Integration Test Double
+
+### P12.12 The in-process FastAPI server is the canonical integration test double
+
+Integration tests MUST spin up an in-process FastAPI server using the same `server.py` and `SQLAlchemyStateStore` with an `:memory:` SQLite database, then point `HTTPStateStore` at it. This is the canonical integration test path. HTTP calls MUST NOT be mocked in integration tests — the `HTTPStateStore` ↔ in-process server round-trip is what the tests verify. Unit tests may mock `StateStore` directly via the protocol.
 
 ---
 
 ### Violations
 
-- Configuring or reusing `worker_id` across restarts [P12.1]
-- Polling before the registration record is written [P12.2]
-- Adding registration fields without a policy amendment [P12.2]
-- Any process other than the staleness formula writing `stale` to `work_claims.status` [P12.3]
-- Writing any status value other than `running`, `completed`, `failed`, `abandoned` [P12.4]
-- Inserting a new row for a reclaim instead of using conditional UPDATE [P12.4]
-- Agent composites, bookkeeping server, CLI, or background jobs writing to `work_claims.status` [P12.5]
-- Setting `completed` before PR URL is confirmed in `dag_runs` [P12.6]
-- Starting a fresh DAG run after reclaiming a stale claim without attempting resumption [P12.7, P6.5a]
-- Starting a new DAG node after detecting an abandonment trigger [P12.8]
-- Using CLI escalation channel in worker mode [P12.8, P6.6]
-- Skipping any P12.9 eligibility check before a claim attempt [P12.9]
-- Using a dry-run push to verify branch writability [P12.9]
-- Treating a failed eligibility check as an escalation [P12.9]
-- Starting a DAG run without re-running all P12.9 eligibility checks after claim [P12.10]
-- Posting a GitHub escalation comment for a pre-run eligibility failure detected post-claim [P12.10]
-- Claiming a non-stale running issue [P12.11]
-- Computing or hardcoding a budget value; falling back when `WORKER_RUN_BUDGET_USD` is unset [P12.12]
-- Claiming beyond the per-repo concurrency cap [P12.12]
-- Emitting worker events via a separate logging path [P12.13]
-- Omitting `worker_id` from any worker event [P12.13]
-- Omitting `dag_run_id` from a worker event that has an active claim [P12.13]
-- Omitting any mandatory event from P12.14 [P12.14]
-- Emitting high-frequency poll-cycle events [P12.14]
-- Using free-text or a catch-all enum value for `skip_reason` [P12.14]
-- Storing worker events in a separate table or log file [P12.15]
+- A worker that has `DATABASE_URL` set or writes to Postgres directly [P12.1]
+- A worker that instantiates `SQLAlchemyStateStore` [P12.2]
+- A worker that starts when `DATABASE_URL` is present in the environment [P12.3]
+- A worker that starts when `AGENT_AGENT_GIT_PUSH_ENABLED=false` in a non-dev environment [P12.3]
+- Skipping any of the six per-issue lifecycle steps, including temp-clone deletion [P12.5]
+- A worker performing any GitHub label operation (applying or removing any label) [P12.6]
+- Human automation re-applying `agent-ready` after stale detection [P12.6]
+- A worker that does not send heartbeats during execution [P12.7]
+- A worker that implements stale detection logic [P12.10]
+- A worker that writes `status = stale` [P12.10]
+- Starting a fresh run when `dag_run_id` is non-null without attempting resumption [P12.11, P6.5a]
+- Discarding completed node outputs during resumption [P12.11, P6.5a]
+- Performing mid-node resumption instead of resetting crashed nodes to `pending` [P12.11]
+- Not pushing a checkpoint branch after each coding node completes [P12.8]
+- Silently swallowing a persistent checkpoint push failure instead of escalating [P12.8]
+- Using the CLI escalation channel in worker mode [P12.9]
+- Pausing a worker and polling for a human GitHub comment response instead of fire-and-release [P12.9, P6 worker escalation]
+- A worker calling any GitHub label mutation API (add/remove label), even if `GITHUB_TOKEN` permits it [P12.6]
+- A worker missing `GITHUB_TOKEN` attempting to run anyway [P12.3]
+- Mocking HTTP calls in integration tests instead of using the in-process server [P12.12]
 
 ### Quick Reference
 
 | Rule | Requirement |
 |------|-------------|
-| P12.1–2 | `worker_id` = `uuid4()`, never reused; registration record before first poll |
-| P12.3 | Stale = `5 × WORKER_HEARTBEAT_INTERVAL_SECONDS`; read-time only; never written |
-| P12.4 | Four written statuses; reclaims use conditional UPDATE |
-| P12.5 | Worker process is sole writer to `work_claims.status` |
-| P12.6 | `completed` requires confirmed PR URL in `dag_runs` |
-| P12.7 | Reclaim → resumption check first; fresh run only if not resumable |
-| P12.8 | Abandonment triggers: label removed, issue closed, repo unreachable; stop at next node boundary |
-| P12.9 | Five eligibility checks; failures → skip events, not escalations; permissions API for branch check |
-| P12.10 | Re-run all P12.9 checks after claim; any failure → `abandoned`, no DAG run, no escalation comment |
-| P12.11 | Non-stale running claim blocks all workers unconditionally |
-| P12.12 | Budget from `WORKER_RUN_BUDGET_USD` only; unset → refuse to start; per-repo cap default 2; cap enforced atomically in claim CTE |
-| P12.13 | `emit_event` path; `worker_id` bound at startup; `dag_run_id: null` permitted pre-claim |
-| P12.14 | 11 mandatory events; no poll-cycle events; `SkipReason` enum, no catch-alls |
-| P12.15 | Level 2; 90-day retention; same table as DAG events; three bookkeeping endpoints including queue age |
+| P12.1 | Hosted server is sole coordinator and sole Postgres writer; workers have no `DATABASE_URL` |
+| P12.2 | Workers use `HTTPStateStore` exclusively; `SQLAlchemyStateStore` is server-only |
+| P12.3 | Workers require `SERVER_URL`, `SERVER_TOKEN`, `GIT_PUSH_ENABLED=true`, `GITHUB_TOKEN`; `DATABASE_URL` must be absent; missing `GITHUB_TOKEN` is a startup error |
+| P12.4 | Two worker types (immediate / future); identical per-issue protocol; differ only in lifetime |
+| P12.5 | Six-step per-issue lifecycle: poll → claim (409 = re-poll) → clone+validate → run with HTTPStateStore → checkpoint push → release+cleanup |
+| P12.6 | Server owns all label transitions: removes `agent-ready`/adds `agent-running` on claim, removes `agent-running` on completion, swaps `agent-running→agent-stale` on stale detection; human re-queues manually; workers perform no label operations |
+| P12.7 | Heartbeat every 60s via `POST /claims/{issue_url}/heartbeat`; stale detection is server-only |
+| P12.10 | Server background task every 60s detects `last_heartbeat_at < now - 10min`; marks stale, swaps label, emits event |
+| P12.11 | Non-null `dag_run_id` → mandatory resumption attempt; check remote branch; resume or escalate+fail; no silent fresh runs |
+| P12.8 | Push checkpoint branch after each coding node; retry 3× on failure; persistent failure escalates with "crash recovery degraded" |
+| P12.9 | `github_comment` only — sole permitted channel, not a default; CLI channel not applicable to workers; if `AGENT_AGENT_ESCALATION_CHANNEL=cli` is set, silently override to `github_comment` and emit WARNING; fire-and-release model: post comment then release claim, do not poll for response |
+| P12.12 | Integration tests use in-process FastAPI + SQLite `:memory:`; no HTTP mocking |
