@@ -146,8 +146,34 @@ Integration tests MUST spin up an in-process FastAPI server using the same `serv
 
 ---
 
+## Worker Registration
+
+### P12.13 Workers write a registration record before polling begins
+
+> **Draft policy — initial field set. Expected to stabilize after implementation in #25.**
+
+Before a worker calls `GET /claims/available` or processes `--issue-url`, it MUST `POST /workers/register` to the hosted server. If registration fails, the worker MUST exit with a clear error message — polling must never begin without a confirmed registration record.
+
+The registration record contains the following fields:
+
+| Field | Type | Source | Purpose |
+|-------|------|--------|---------|
+| `worker_id` | `TEXT` | `uuid4()` at startup, never reused | Primary key; links all claims and events to this worker instance |
+| `worker_type` | `TEXT` | `immediate` or `future` (from CLI invocation) | Distinguishes persistent pollers from ephemeral single-run workers [P12.4] |
+| `version` | `TEXT` | `importlib.metadata.version("agent-agent")` | Identifies which agent_agent release made the claim — important during self-improvement runs |
+| `hostname` | `TEXT` | `socket.gethostname()` | Aids debugging of stale or dead workers |
+| `started_at` | `TEXT` | ISO 8601 UTC timestamp at startup | Baseline for health signal |
+| `last_seen_at` | `TEXT` | Updated by each heartbeat [P12.7] | Primary worker health signal; queue age is computed from this |
+
+Adding fields to this record requires a policy amendment to this section before implementation.
+
+---
+
 ### Violations
 
+- A worker that polls or processes `--issue-url` before a confirmed registration record exists [P12.13]
+- A worker that continues running after a failed registration instead of exiting [P12.13]
+- Adding fields to the registration record without a policy amendment [P12.13]
 - A worker that has `DATABASE_URL` set or writes to Postgres directly [P12.1]
 - A worker that instantiates `SQLAlchemyStateStore` [P12.2]
 - A worker that starts when `DATABASE_URL` is present in the environment [P12.3]
@@ -185,3 +211,4 @@ Integration tests MUST spin up an in-process FastAPI server using the same `serv
 | P12.8 | Push checkpoint branch after each coding node; retry 3× on failure; persistent failure escalates with "crash recovery degraded" |
 | P12.9 | `github_comment` only — sole permitted channel, not a default; CLI channel not applicable to workers; if `AGENT_AGENT_ESCALATION_CHANNEL=cli` is set, silently override to `github_comment` and emit WARNING; fire-and-release model: post comment then release claim, do not poll for response |
 | P12.12 | Integration tests use in-process FastAPI + SQLite `:memory:`; no HTTP mocking |
+| P12.13 | *(draft)* Workers `POST /workers/register` before polling; failure = exit; 6 minimum fields; field additions require policy amendment |
